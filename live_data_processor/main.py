@@ -73,7 +73,7 @@ def start_live_data(script: str, is_event: bool) -> None:
     logger.info("Starting live data with params: %s", params)
     try:
         StartLiveData(**params)
-    except Exception:
+    except RuntimeError:
         logger.exception("An Exception occured during live data, waiting for 25 seconds then trying again...")
         time.sleep(25)
         start_live_data(script, is_event)
