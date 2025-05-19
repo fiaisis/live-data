@@ -71,7 +71,11 @@ def start_live_data(script: str, is_event: bool) -> None:
         params["Instrument"] = INSTRUMENT
         params["AccumulationMethod"] = "Append"
     logger.info("Starting live data with params: %s", params)
-    StartLiveData(**params)
+    try:
+        StartLiveData(**params)
+    except RuntimeError:
+        logger.exception("A Runtime error occured during live data, waiting for 5 seconds then trying again...")
+        start_live_data(script, is_event)
 
 
 def cancel_live_data() -> None:
