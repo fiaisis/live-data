@@ -57,6 +57,8 @@ logging.basicConfig(
 logger = logging.getLogger("LiveDataOperator")
 logging.getLogger("aiohttp.access").addFilter(EndpointFilter())
 
+DEV_MODE = os.environ.get("DEV_MODE").lower() == "true"
+
 
 CEPH_CREDS_SECRET_NAME = os.environ.get("CEPH_CREDS_SECRET_NAME", "ceph-creds")
 PROCESSOR_IMAGE = os.environ.get("LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb84cac95e094cdd245df6ca3bfb6")
@@ -97,7 +99,7 @@ def _setup_ceph_pv(
                 "mounter": "fuse",
                 "fsName": fs_name,
                 "staticVolume": "true",
-                "rootPath": f"/isis/instrument/GENERIC/livereduce/{instrument.upper()}",
+                "rootPath": f"/isis/instrument/GENERIC/livereduce/{instrument.upper()}{'-staging' if DEV_MODE else ''}",
             },
         )
         spec = V1PersistentVolumeSpec(
