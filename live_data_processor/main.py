@@ -18,6 +18,13 @@ from mantid.simpleapi import StartLiveData
 
 INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
 
+stdout_handler = logging.StreamHandler(stream=sys.stdout)
+logging.basicConfig(
+    handlers=[stdout_handler],
+    format="[%(asctime)s]-%(name)s-%(levelname)s: %(message)s",
+    level=logging.INFO,
+)
+
 logger = logging.getLogger(__name__)
 
 
