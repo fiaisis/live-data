@@ -57,7 +57,7 @@ logging.basicConfig(
 logger = logging.getLogger("LiveDataOperator")
 logging.getLogger("aiohttp.access").addFilter(EndpointFilter())
 
-DEV_MODE = os.environ.get("DEV_MODE").lower() == "true"
+DEV_MODE = os.environ.get("DEV_MODE", "true").lower() == "true"
 
 
 CEPH_CREDS_SECRET_NAME = os.environ.get("CEPH_CREDS_SECRET_NAME", "ceph-creds")
