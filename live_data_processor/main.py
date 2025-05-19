@@ -43,6 +43,7 @@ def get_script() -> str:
     )
     if response.status_code != HTTPStatus.OK:
         raise RuntimeError("Failed to obtain script from remote, recieved status code: %s", response.status_code)
+    logger.info("Successfully obtained %s script", INSTRUMENT)
     return response.text
 
 
@@ -69,7 +70,7 @@ def start_live_data(script: str, is_event: bool) -> None:
     else:
         params["Instrument"] = INSTRUMENT
         params["AccumulationMethod"] = "Append"
-
+    logger.info("Starting live data with params: %s", params)
     StartLiveData(**params)
 
 
@@ -84,7 +85,7 @@ def cancel_live_data() -> None:
 
     :return: None
     """
-
+    logger.info("Cancelling live data")
     AlgorithmManager.CancelAll()
     while AlgorithmManager.runningInstancesOf("StartLiveData") or AlgorithmManager.runningInstancesOf(
         "MonitorLiveData"
