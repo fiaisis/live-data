@@ -4,6 +4,5 @@ WORKDIR /app
 
 COPY ./live_data_processor/main.py main.py
 
-RUN pip install websockets
 
 ENTRYPOINT ["python", "main.py"]

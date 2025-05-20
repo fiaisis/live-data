@@ -217,9 +217,13 @@ def start_live_data_processor(instrument: str) -> None:
     """
 
     body = setup_deployment(CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME)
-
     body = ApiClient().sanitize_for_serialization(body)  # serialize so kopf may adopt it
     kopf.adopt(body)
+
+    deployment_image = f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}"
+    annotations = body.setdefault("metadata", {}).setdefault("annotations", {})
+    annotations["livedataprocessor/last-deployed-image"] = deployment_image
+
     try:
         AppsV1Api().create_namespaced_deployment(namespace=CEPH_CREDS_SECRET_NAMESPACE, body=body)
     except ApiException as exc:
@@ -253,3 +257,33 @@ def create_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     instrument = body["metadata"]["name"]
     logger.info(f"Creating LiveDataProcessor {body['metadata']['name']}")
     start_live_data_processor(instrument)
+
+
+@kopf.on.resume("livedataprocessors")
+def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
+    """
+    Handles the resumption of a LiveDataProcessor custom resource in Kubernetes.
+
+    This function is invoked when a LiveDataProcessor custom resource is resumed in the Kubernetes cluster,
+    such as after a pod restart or operator downtime. It checks if the processor image has changed since the
+    last deployment and redeploys the processor if necessary.
+
+    :param body: A dictionary representation of the custom resource's body, containing metadata,
+                 specifications, and other details about the resource.
+    :param spec: UNUSED The specifications of the custom resource, as provided in its definition.
+                 Typically used to configure the resource's behavior.
+    :param kwargs: UNUSED Additional parameters provided by the Kopf's resume handler, such as event-specific
+                   context and resource information.
+    :return: None
+    """
+    instrument = body["metadata"]["name"]
+    logger.info(f"Resuming LiveDataProcessor {instrument}")
+
+    current_image = f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}"
+    last_image = body.get("metadata", {}).get("annotations", {}).get("livedataprocessor/last-deployed-image")
+
+    if current_image != last_image:
+        logger.info(f"Image changed for {instrument}, redeploying.")
+        start_live_data_processor(instrument)
+    else:
+        logger.info(f"No image change for {instrument}, skipping redeploy.")
