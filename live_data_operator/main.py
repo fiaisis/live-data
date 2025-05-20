@@ -279,7 +279,7 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
 
     deployed_image = body.get("metadata", {}).get("labels", {}).get("processor-image-sha", "None")
 
-    if deployed_image != PROCESSOR_IMAGE:
+    if deployed_image != PROCESSOR_IMAGE[0:12]:
         logger.info(f"Image changed for {instrument}, redeploying.")
         start_live_data_processor(instrument)
     else:
