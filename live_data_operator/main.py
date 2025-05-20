@@ -192,7 +192,7 @@ def setup_deployment(
             )
         ],
     )
-    labels = {"app": f"livedataprocessor-{instrument}", "processor-image-sha": PROCESSOR_IMAGE}
+    labels = {"app": f"livedataprocessor-{instrument}"}
     template = V1PodTemplateSpec(metadata=V1ObjectMeta(labels=labels), spec=pod_spec)
     deployment_spec = V1DeploymentSpec(replicas=1, selector=V1LabelSelector(match_labels=labels), template=template)
 
@@ -200,7 +200,9 @@ def setup_deployment(
         api_version="apps/v1",
         kind="Deployment",
         spec=deployment_spec,
-        metadata=V1ObjectMeta(name=f"livedataprocessor-{instrument}-deployment"),
+        metadata=V1ObjectMeta(
+            name=f"livedataprocessor-{instrument}-deployment", labels={"processor-image-sha": PROCESSOR_IMAGE}
+        ),
     )
 
 
