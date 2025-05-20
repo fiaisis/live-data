@@ -28,6 +28,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class ReductionError(RuntimeError):
+    """Raised when StartLiveData raises an exception"""
+
+
 def get_script() -> str:
     """
     Fetch the latest live data processing script for a specific instrument.
@@ -73,10 +77,8 @@ def start_live_data(script: str, is_event: bool) -> None:
     logger.info("Starting live data with params: %s", params)
     try:
         StartLiveData(**params)
-    except RuntimeError:
-        logger.exception("An Exception occured during live data, waiting for 25 seconds then trying again...")
-        time.sleep(25)
-        start_live_data(script, is_event)
+    except RuntimeError as exc:
+        raise ReductionError("Error occurred in reduction") from exc
 
 
 def cancel_live_data() -> None:
@@ -133,20 +135,25 @@ def main() -> None:
     logger.info("Starting live-data for %s", INSTRUMENT)
     script = get_script()
     is_event = False  # however you determine this
-    start_live_data(script, is_event)
+    try:
+        start_live_data(script, is_event)
 
-    while True:
+        while True:
+            time.sleep(15)
+            try:
+                new_script = get_script()
+            except RuntimeError:
+                logger.warning("Could not get latest script, continuing with current script")
+                new_script = script
+            if script != new_script:
+                logger.info("New script detected, restarting live data…")
+                cancel_live_data()
+                script = new_script
+                start_live_data(script, is_event)
+    except ReductionError:
+        logger.exception("Error occurred in reduction, waiting 15 seconds and restarting...")
         time.sleep(15)
-        try:
-            new_script = get_script()
-        except RuntimeError:
-            logger.warning("Could not get latest script, continuing with current script")
-            new_script = script
-        if script != new_script:
-            logger.info("New script detected, restarting live data…")
-            cancel_live_data()
-            script = new_script
-            start_live_data(script, is_event)
+        main()
 
 
 if __name__ == "__main__":
