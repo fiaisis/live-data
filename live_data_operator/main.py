@@ -276,6 +276,7 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
     instrument = body["metadata"]["name"]
     logger.info(f"Resuming LiveDataProcessor {instrument}")
+    logger.info(body)
 
     deployed_image = body.get("metadata", {}).get("labels", {}).get("processor-image-sha", "None")
 
