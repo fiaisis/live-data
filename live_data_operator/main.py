@@ -192,7 +192,7 @@ def setup_deployment(
             )
         ],
     )
-    labels = {"app": f"livedataprocessor-{instrument}"}
+    labels = {"app": f"livedataprocessor-{instrument}", "processor-image-sha": PROCESSOR_IMAGE}
     template = V1PodTemplateSpec(metadata=V1ObjectMeta(labels=labels), spec=pod_spec)
     deployment_spec = V1DeploymentSpec(replicas=1, selector=V1LabelSelector(match_labels=labels), template=template)
 
@@ -219,10 +219,6 @@ def start_live_data_processor(instrument: str) -> None:
     body = setup_deployment(CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME)
     body = ApiClient().sanitize_for_serialization(body)  # serialize so kopf may adopt it
     kopf.adopt(body)
-
-    deployment_image = f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}"
-    annotations = body.setdefault("metadata", {}).setdefault("annotations", {})
-    annotations["livedataprocessor/last-deployed-image"] = deployment_image
 
     try:
         AppsV1Api().create_namespaced_deployment(namespace=CEPH_CREDS_SECRET_NAMESPACE, body=body)
@@ -279,10 +275,10 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     instrument = body["metadata"]["name"]
     logger.info(f"Resuming LiveDataProcessor {instrument}")
 
-    current_image = f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}"
-    last_image = body.get("metadata", {}).get("annotations", {}).get("livedataprocessor/last-deployed-image")
 
-    if current_image != last_image:
+    deployed_image = body.get("metadata", {}).get("labels", {}).get("processor-image-sha", "None")
+
+    if deployed_image != PROCESSOR_IMAGE:
         logger.info(f"Image changed for {instrument}, redeploying.")
         start_live_data_processor(instrument)
     else:
