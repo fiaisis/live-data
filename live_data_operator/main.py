@@ -263,8 +263,7 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     Handles the resumption of a LiveDataProcessor custom resource in Kubernetes.
 
     This function is invoked when a LiveDataProcessor custom resource is resumed in the Kubernetes cluster,
-    such as after a pod restart or operator downtime. It checks if the processor image has changed since the
-    last deployment and redeploys the processor if necessary.
+    such as after a pod restart or operator downtime and redeploys the processor.
 
     :param body: A dictionary representation of the custom resource's body, containing metadata,
                  specifications, and other details about the resource.
@@ -275,13 +274,4 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     :return: None
     """
     instrument = body["metadata"]["name"]
-    logger.info(f"Resuming LiveDataProcessor {instrument}")
-    logger.info(body)
-
-    deployed_image = body.get("metadata", {}).get("labels", {}).get("processor-image-sha", "None")
-
-    if deployed_image != PROCESSOR_IMAGE[0:12]:
-        logger.info(f"Image changed for {instrument}, redeploying.")
-        start_live_data_processor(instrument)
-    else:
-        logger.info(f"No image change for {instrument}, skipping redeploy.")
+    logger.info(f"Operator resumed, redeploying {instrument} LiveDataProcessor")
