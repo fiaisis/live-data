@@ -152,7 +152,7 @@ def main() -> None:
                 start_live_data(script, is_event)
     except ReductionError:
         logger.exception("Error occurred in reduction, waiting 15 seconds and restarting...")
-        time.sleep(15)
+        time.sleep(150)  # temp 150 seconds
         main()
 
 
