@@ -9,7 +9,6 @@ from http import HTTPStatus
 from typing import Any
 
 import kopf
-from kubernetes import client
 from kubernetes.client import (  # type: ignore
     ApiClient,
     ApiException,
@@ -68,7 +67,7 @@ CLUSTER_ID = os.environ.get("CLUSTER_ID", "ba68226a-672f-4ba5-97bc-22840318b2ec"
 FS_NAME = os.environ.get("FS_NAME", "deneb")
 
 
-def _setup_archive_pv(instrument: str, secret_namespace: str) -> str:
+def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
     """
     Sets up the archive PV using the loaded kubeconfig as a destination
     :param instrument: str, the name of the instrument for the livedataprocessor pv
@@ -76,28 +75,27 @@ def _setup_archive_pv(instrument: str, secret_namespace: str) -> str:
     :return: str, the name of the archive PV
     """
     pv_name = f"livedataprocessor-{instrument}-archive-pv-smb"
-    metadata = client.V1ObjectMeta(name=pv_name, annotations={"pv.kubernetes.io/provisioned-by": "smb.csi.k8s.io"})
-    secret_ref = client.V1SecretReference(name="archive-creds", namespace=secret_namespace)
-    csi = client.V1CSIPersistentVolumeSource(
+    metadata = V1ObjectMeta(name=pv_name, annotations={"pv.kubernetes.io/provisioned-by": "smb.csi.k8s.io"})
+    secret_ref = V1SecretReference(name="archive-creds", namespace=secret_namespace)
+    csi = V1CSIPersistentVolumeSource(
         driver="smb.csi.k8s.io",
         read_only=True,
         volume_handle=pv_name,
         volume_attributes={"source": "//isisdatar55.isis.cclrc.ac.uk/inst$/"},
         node_stage_secret_ref=secret_ref,
     )
-    spec = client.V1PersistentVolumeSpec(
+    spec = V1PersistentVolumeSpec(
         capacity={"storage": "1000Gi"},
         access_modes=["ReadOnlyMany"],
         persistent_volume_reclaim_policy="Retain",
         mount_options=["noserverino", "_netdev", "vers=2.1"],
         csi=csi,
     )
-    archive_pv = client.V1PersistentVolume(api_version="v1", kind="PersistentVolume", metadata=metadata, spec=spec)
-    client.CoreV1Api().create_persistent_volume(archive_pv)
-    return pv_name
+    archive_pv = V1PersistentVolume(api_version="v1", kind="PersistentVolume", metadata=metadata, spec=spec)
+    CoreV1Api().create_persistent_volume(archive_pv)
 
 
-def _setup_archive_pvc(instrument: str, job_namespace: str) -> str:
+def _setup_archive_pvc(instrument: str, job_namespace: str) -> None:
     """
     Sets up the archive PVC using the loaded kubeconfig as a destination
     :param instrument: str, the name of the instrument that the livedataprocessor PVC is made for
@@ -105,22 +103,21 @@ def _setup_archive_pvc(instrument: str, job_namespace: str) -> str:
     :return: str, the name of the PVC
     """
     pvc_name = f"livedataprocessor-{instrument}-archive-pvc"
-    metadata = client.V1ObjectMeta(name=pvc_name)
-    resources = client.V1ResourceRequirements(requests={"storage": "1000Gi"})
-    spec = client.V1PersistentVolumeClaimSpec(
+    metadata = V1ObjectMeta(name=pvc_name)
+    resources = V1ResourceRequirements(requests={"storage": "1000Gi"})
+    spec = V1PersistentVolumeClaimSpec(
         access_modes=["ReadOnlyMany"],
         resources=resources,
         volume_name=f"livedataprocessor-{instrument}-archive-pv-smb",
         storage_class_name="",
     )
-    archive_pvc = client.V1PersistentVolumeClaim(
+    archive_pvc = V1PersistentVolumeClaim(
         api_version="v1",
         kind="PersistentVolumeClaim",
         metadata=metadata,
         spec=spec,
     )
-    client.CoreV1Api().create_namespaced_persistent_volume_claim(namespace=job_namespace, body=archive_pvc)
-    return pvc_name
+    CoreV1Api().create_namespaced_persistent_volume_claim(namespace=job_namespace, body=archive_pvc)
 
 
 def _setup_ceph_pv(
