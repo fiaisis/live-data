@@ -5,6 +5,7 @@ Main Module
 import logging
 import os
 import sys
+from functools import wraps
 from http import HTTPStatus
 from typing import Any
 
@@ -67,6 +68,27 @@ CLUSTER_ID = os.environ.get("CLUSTER_ID", "ba68226a-672f-4ba5-97bc-22840318b2ec"
 FS_NAME = os.environ.get("FS_NAME", "deneb")
 
 
+def skip_conflict(func):
+    """
+    Decorator to skip the creation of a resource that already exists
+    :param func: The func to wrap
+    :return: The wrapped function
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except ApiException as exc:
+            if exc.status == HTTPStatus.CONFLICT:
+                logger.info("resource created by %s already exists, skipping creation", func.__name__)
+            else:
+                raise
+
+    return wrapper
+
+
+@skip_conflict
 def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
     """
     Sets up the archive PV using the loaded kubeconfig as a destination
@@ -74,6 +96,7 @@ def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
     :param secret_namespace: str, the namespace of the secret for mounting
     :return: str, the name of the archive PV
     """
+
     pv_name = f"livedataprocessor-{instrument}-archive-pv-smb"
     metadata = V1ObjectMeta(name=pv_name, annotations={"pv.kubernetes.io/provisioned-by": "smb.csi.k8s.io"})
     secret_ref = V1SecretReference(name="archive-creds", namespace=secret_namespace)
@@ -95,6 +118,7 @@ def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
     CoreV1Api().create_persistent_volume(archive_pv)
 
 
+@skip_conflict
 def _setup_archive_pvc(instrument: str, job_namespace: str) -> None:
     """
     Sets up the archive PVC using the loaded kubeconfig as a destination
@@ -139,39 +163,34 @@ def _setup_ceph_pv(
     :param instrument: Name of the instrument, used to create volume attributes.
     :return: None
     """
-    try:
-        pv_name = f"livedataprocessor-{instrument}-ceph-pv"
-        metadata = V1ObjectMeta(name=pv_name)
-        secret_ref = V1SecretReference(name=ceph_creds_k8s_secret_name, namespace=ceph_creds_k8s_namespace)
-        csi = V1CSIPersistentVolumeSource(
-            driver="cephfs.csi.ceph.com",
-            node_stage_secret_ref=secret_ref,
-            volume_handle=pv_name,
-            volume_attributes={
-                "clusterID": cluster_id,
-                "mounter": "fuse",
-                "fsName": fs_name,
-                "staticVolume": "true",
-                "rootPath": f"/isis/instrument/GENERIC/livereduce/{instrument.upper()}{'-staging' if DEV_MODE else ''}",
-            },
-        )
-        spec = V1PersistentVolumeSpec(
-            capacity={"storage": "1000Gi"},
-            storage_class_name="",
-            access_modes=["ReadWriteMany"],
-            persistent_volume_reclaim_policy="Retain",
-            volume_mode="Filesystem",
-            csi=csi,
-        )
-        ceph_pv = V1PersistentVolume(api_version="v1", kind="PersistentVolume", metadata=metadata, spec=spec)
-        CoreV1Api().create_persistent_volume(ceph_pv)
-    except ApiException as exc:
-        if exc.status == HTTPStatus.CONFLICT:
-            logger.info("PV already exists, skipping creation")
-        else:
-            raise
+    pv_name = f"livedataprocessor-{instrument}-ceph-pv"
+    metadata = V1ObjectMeta(name=pv_name)
+    secret_ref = V1SecretReference(name=ceph_creds_k8s_secret_name, namespace=ceph_creds_k8s_namespace)
+    csi = V1CSIPersistentVolumeSource(
+        driver="cephfs.csi.ceph.com",
+        node_stage_secret_ref=secret_ref,
+        volume_handle=pv_name,
+        volume_attributes={
+            "clusterID": cluster_id,
+            "mounter": "fuse",
+            "fsName": fs_name,
+            "staticVolume": "true",
+            "rootPath": f"/isis/instrument/GENERIC/livereduce/{instrument.upper()}{'-staging' if DEV_MODE else ''}",
+        },
+    )
+    spec = V1PersistentVolumeSpec(
+        capacity={"storage": "1000Gi"},
+        storage_class_name="",
+        access_modes=["ReadWriteMany"],
+        persistent_volume_reclaim_policy="Retain",
+        volume_mode="Filesystem",
+        csi=csi,
+    )
+    ceph_pv = V1PersistentVolume(api_version="v1", kind="PersistentVolume", metadata=metadata, spec=spec)
+    CoreV1Api().create_persistent_volume(ceph_pv)
 
 
+@skip_conflict
 def _setup_ceph_pvc(instrument: str, namespace: str) -> None:
     """
     Sets up a Ceph PersistentVolumeClaim (PVC) in Kubernetes.
@@ -182,28 +201,22 @@ def _setup_ceph_pvc(instrument: str, namespace: str) -> None:
     :param namespace: Namespace in which the PVC is created.
     :return: None
     """
-    try:
-        pvc_name = f"livedataprocessor-{instrument}-ceph-pvc"
-        metadata = V1ObjectMeta(name=pvc_name)
-        resources = V1ResourceRequirements(requests={"storage": "1000Gi"})
-        spec = V1PersistentVolumeClaimSpec(
-            access_modes=["ReadWriteMany"],
-            resources=resources,
-            volume_name=f"livedataprocessor-{instrument}-ceph-pv",
-            storage_class_name="",
-        )
-        ceph_pvc = V1PersistentVolumeClaim(
-            api_version="v1",
-            kind="PersistentVolumeClaim",
-            metadata=metadata,
-            spec=spec,
-        )
-        CoreV1Api().create_namespaced_persistent_volume_claim(namespace=namespace, body=ceph_pvc)
-    except ApiException as exc:
-        if exc.status == HTTPStatus.CONFLICT:
-            logger.info("PVC Already exists, skipping creation")
-        else:
-            raise
+    pvc_name = f"livedataprocessor-{instrument}-ceph-pvc"
+    metadata = V1ObjectMeta(name=pvc_name)
+    resources = V1ResourceRequirements(requests={"storage": "1000Gi"})
+    spec = V1PersistentVolumeClaimSpec(
+        access_modes=["ReadWriteMany"],
+        resources=resources,
+        volume_name=f"livedataprocessor-{instrument}-ceph-pv",
+        storage_class_name="",
+    )
+    ceph_pvc = V1PersistentVolumeClaim(
+        api_version="v1",
+        kind="PersistentVolumeClaim",
+        metadata=metadata,
+        spec=spec,
+    )
+    CoreV1Api().create_namespaced_persistent_volume_claim(namespace=namespace, body=ceph_pvc)
 
 
 def setup_deployment(
