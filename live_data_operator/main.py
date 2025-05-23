@@ -31,6 +31,7 @@ from kubernetes.client import (  # type: ignore
     V1PodTemplateSpec,
     V1ResourceRequirements,
     V1SecretReference,
+    V1Toleration,
     V1Volume,
     V1VolumeMount,
 )
@@ -257,6 +258,7 @@ def setup_deployment(
         containers=[container],
         restart_policy="Always",
         service_account="live-data-operator",
+        tolerations=[V1Toleration(key="big-worker", operator="Equal", value="true", effect="NoSchedule")],
         volumes=[
             V1Volume(
                 name="ceph-mount",
