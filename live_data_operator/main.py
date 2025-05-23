@@ -258,7 +258,7 @@ def setup_deployment(
         containers=[container],
         restart_policy="Always",
         service_account="live-data-operator",
-        tolerations=[V1Toleration(key="big-worker", operator="Equal", value="true", effect="NoSchedule")],
+        tolerations=[V1Toleration(key="big", operator="Equal", value="true", effect="NoSchedule")],
         volumes=[
             V1Volume(
                 name="ceph-mount",
