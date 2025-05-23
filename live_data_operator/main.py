@@ -78,6 +78,7 @@ def skip_conflict(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
+            logger.info("Inside decorator")
             return func(*args, **kwargs)
         except ApiException as exc:
             if exc.status == HTTPStatus.CONFLICT:
