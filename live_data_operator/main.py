@@ -262,7 +262,13 @@ def setup_deployment(
                 persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
                     claim_name=f"livedataprocessor-{instrument}-ceph-pvc", read_only=False
                 ),
-            )
+            ),
+            V1Volume(
+                name="archive-mount",
+                persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
+                    claim_name=f"livedataprocessor-{instrument}-archive-pvc", read_only=True
+                ),
+            ),
         ],
     )
     labels = {"app": f"livedataprocessor-{instrument}"}
