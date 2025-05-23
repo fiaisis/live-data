@@ -145,6 +145,7 @@ def _setup_archive_pvc(instrument: str, job_namespace: str) -> None:
     CoreV1Api().create_namespaced_persistent_volume_claim(namespace=job_namespace, body=archive_pvc)
 
 
+@skip_conflict
 def _setup_ceph_pv(
     ceph_creds_k8s_secret_name: str,
     ceph_creds_k8s_namespace: str,
