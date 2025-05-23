@@ -246,7 +246,7 @@ def setup_deployment(
     container = V1Container(
         name=f"livedataprocessor-{instrument}",
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
-        resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "32Gi"}),
+        resources=V1ResourceRequirements(requests={"memory": "16Gi"}, limits={"memory": "16Gi"}),
         volume_mounts=[
             V1VolumeMount(name="ceph-mount", mount_path="/output"),
             V1VolumeMount(name="archive-mount", mount_path="/archive"),
