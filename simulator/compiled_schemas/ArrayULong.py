@@ -22,7 +22,7 @@ class ArrayULong(object):
         return cls.GetRootAs(buf, offset)
     @classmethod
     def ArrayULongBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x68\x73\x30\x30", size_prefixed=size_prefixed)
+        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x66\x31\x34\x32", size_prefixed=size_prefixed)
 
     # ArrayULong
     def Init(self, buf, pos):

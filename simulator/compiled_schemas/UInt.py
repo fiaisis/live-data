@@ -22,7 +22,7 @@ class UInt(object):
         return cls.GetRootAs(buf, offset)
     @classmethod
     def UIntBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x66\x31\x34\x34", size_prefixed=size_prefixed)
+        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x66\x31\x34\x32", size_prefixed=size_prefixed)
 
     # UInt
     def Init(self, buf, pos):

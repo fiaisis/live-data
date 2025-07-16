@@ -4,10 +4,23 @@
 
 class Value(object):
     NONE = 0
-    Object = 1
-    Bool = 2
-    Long = 3
-    Double = 4
-    String = 5
-    Dict = 6
-    Array = 7
+    Byte = 1
+    UByte = 2
+    Short = 3
+    UShort = 4
+    Int = 5
+    UInt = 6
+    Long = 7
+    ULong = 8
+    Float = 9
+    Double = 10
+    ArrayByte = 11
+    ArrayUByte = 12
+    ArrayShort = 13
+    ArrayUShort = 14
+    ArrayInt = 15
+    ArrayUInt = 16
+    ArrayLong = 17
+    ArrayULong = 18
+    ArrayFloat = 19
+    ArrayDouble = 20

@@ -22,7 +22,7 @@ class Long(object):
         return cls.GetRootAs(buf, offset)
     @classmethod
     def LongBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x6E\x73\x31\x31", size_prefixed=size_prefixed)
+        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x66\x31\x34\x32", size_prefixed=size_prefixed)
 
     # Long
     def Init(self, buf, pos):

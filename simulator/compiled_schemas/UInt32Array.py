@@ -22,7 +22,7 @@ class UInt32Array(object):
         return cls.GetRootAs(buf, offset)
     @classmethod
     def UInt32ArrayBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x73\x65\x6E\x76", size_prefixed=size_prefixed)
+        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x73\x65\x30\x30", size_prefixed=size_prefixed)
 
     # UInt32Array
     def Init(self, buf, pos):

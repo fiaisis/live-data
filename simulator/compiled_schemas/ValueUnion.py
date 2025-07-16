@@ -12,3 +12,5 @@ class ValueUnion(object):
     UInt32Array = 6
     Int64Array = 7
     UInt64Array = 8
+    DoubleArray = 9
+    FloatArray = 10

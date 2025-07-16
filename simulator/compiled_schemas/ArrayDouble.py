@@ -22,7 +22,7 @@ class ArrayDouble(object):
         return cls.GetRootAs(buf, offset)
     @classmethod
     def ArrayDoubleBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x68\x73\x30\x31", size_prefixed=size_prefixed)
+        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x66\x31\x34\x32", size_prefixed=size_prefixed)
 
     # ArrayDouble
     def Init(self, buf, pos):

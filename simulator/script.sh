@@ -3,7 +3,7 @@
 # Exit immediately on error
 set -e
 INPUT_DIR="./schemas"
-OUTPUT_DIR="./compiled-schemas"
+OUTPUT_DIR="./compiled_schemas"
 
 # Create the output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"

@@ -22,7 +22,7 @@ class Int8Array(object):
         return cls.GetRootAs(buf, offset)
     @classmethod
     def Int8ArrayBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x73\x65\x6E\x76", size_prefixed=size_prefixed)
+        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x73\x65\x30\x30", size_prefixed=size_prefixed)
 
     # Int8Array
     def Init(self, buf, pos):

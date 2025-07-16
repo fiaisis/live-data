@@ -22,7 +22,7 @@ class Byte(object):
         return cls.GetRootAs(buf, offset)
     @classmethod
     def ByteBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x66\x31\x34\x34", size_prefixed=size_prefixed)
+        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x66\x31\x34\x32", size_prefixed=size_prefixed)
 
     # Byte
     def Init(self, buf, pos):

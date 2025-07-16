@@ -22,7 +22,7 @@ class RunStop(object):
         return cls.GetRootAs(buf, offset)
     @classmethod
     def RunStopBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x62\x61\x35\x37", size_prefixed=size_prefixed)
+        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x36\x73\x34\x74", size_prefixed=size_prefixed)
 
     # RunStop
     def Init(self, buf, pos):
@@ -36,14 +36,35 @@ class RunStop(object):
         return 0
 
     # RunStop
-    def RunNumber(self):
+    def RunName(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Int32Flags, o + self._tab.Pos)
-        return 0
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # RunStop
+    def JobId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # RunStop
+    def ServiceId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # RunStop
+    def CommandId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
 
 def RunStopStart(builder):
-    builder.StartObject(2)
+    builder.StartObject(5)
 
 def Start(builder):
     RunStopStart(builder)
@@ -54,11 +75,29 @@ def RunStopAddStopTime(builder, stopTime):
 def AddStopTime(builder, stopTime):
     RunStopAddStopTime(builder, stopTime)
 
-def RunStopAddRunNumber(builder, runNumber):
-    builder.PrependInt32Slot(1, runNumber, 0)
+def RunStopAddRunName(builder, runName):
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(runName), 0)
 
-def AddRunNumber(builder, runNumber):
-    RunStopAddRunNumber(builder, runNumber)
+def AddRunName(builder, runName):
+    RunStopAddRunName(builder, runName)
+
+def RunStopAddJobId(builder, jobId):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(jobId), 0)
+
+def AddJobId(builder, jobId):
+    RunStopAddJobId(builder, jobId)
+
+def RunStopAddServiceId(builder, serviceId):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(serviceId), 0)
+
+def AddServiceId(builder, serviceId):
+    RunStopAddServiceId(builder, serviceId)
+
+def RunStopAddCommandId(builder, commandId):
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(commandId), 0)
+
+def AddCommandId(builder, commandId):
+    RunStopAddCommandId(builder, commandId)
 
 def RunStopEnd(builder):
     return builder.EndObject()
