@@ -1,20 +1,11 @@
+import datetime
 import logging
 import time
 
 import flatbuffers
 import h5py
 import numpy as np
-from compiled_schemas.EventMessage import (
-    AddDetectorId,
-    AddMessageId,
-    AddPulseTime,
-    AddSourceName,
-    AddTimeOfFlight,
-    End,
-    Start,
-    StartDetectorIdVector,
-    StartTimeOfFlightVector,
-)
+from compiled_schemas import EventMessage, RunStart, RunStop
 from kafka import KafkaProducer
 from nexus_loading import EventDataSource
 
@@ -29,13 +20,13 @@ def build_ev42_from_dict(ev42_message: dict) -> bytes:
     det_array = np.array(ev42_message["event_id"], dtype=np.uint32)
 
     # Build time_of_flight vector
-    StartTimeOfFlightVector(builder, len(tof_array))
+    EventMessage.StartTimeOfFlightVector(builder, len(tof_array))
     for t in reversed(tof_array):
         builder.PrependUint32(t)
     tof_vec = builder.EndVector()
 
     # Build detector_id vector
-    StartDetectorIdVector(builder, len(det_array))
+    EventMessage.StartDetectorIdVector(builder, len(det_array))
     for d in reversed(det_array):
         builder.PrependUint32(d)
     det_vec = builder.EndVector()
@@ -44,13 +35,13 @@ def build_ev42_from_dict(ev42_message: dict) -> bytes:
     source_name_offset = builder.CreateString(ev42_message.get("source_name", "simulator"))
 
     # Build the EventMessage
-    Start(builder)
-    AddSourceName(builder, source_name_offset)
-    AddMessageId(builder, ev42_message["message_id"])
-    AddPulseTime(builder, ev42_message["pulse_time"])
-    AddTimeOfFlight(builder, tof_vec)
-    AddDetectorId(builder, det_vec)
-    msg = End(builder)
+    EventMessage.Start(builder)
+    EventMessage.AddSourceName(builder, source_name_offset)
+    EventMessage.AddMessageId(builder, ev42_message["message_id"])
+    EventMessage.AddPulseTime(builder, ev42_message["pulse_time"])
+    EventMessage.AddTimeOfFlight(builder, tof_vec)
+    EventMessage.AddDetectorId(builder, det_vec)
+    msg = EventMessage.End(builder)
 
     # Finalize buffer with identifier "ev42"
     builder.Finish(msg, file_identifier=b"ev42")
@@ -58,15 +49,33 @@ def build_ev42_from_dict(ev42_message: dict) -> bytes:
     return bytes(builder.Output())
 
 
+def build_run_stop(stop_time, run_name):
+    builder = flatbuffers.Builder(initialSize=1024)
+    RunStop.Start(builder)
+    RunStop.AddStopTime(builder, stop_time)
+    RunStop.AddRunName(builder, run_name)
+    msg = RunStop.End(builder)
+    builder.Finish(msg, file_identifier=b"pl72")
+    return bytes(builder.Output())
+
+
+def build_run_start(start_time, run_name, instrument_name):
+    builder = flatbuffers.Builder(initialSize=1024)
+    RunStart.Start(builder)
+    RunStart.AddStartTime(builder, start_time)
+    RunStart.AddRunName(builder, run_name)
+    RunStart.AddInstrumentName(builder, instrument_name)
+    msg = RunStart.End(builder)
+    builder.Finish(msg, file_identifier=b"6s4t")
+    return bytes(builder.Output())
+
+
 def main():
     producer = KafkaProducer(
         bootstrap_servers="localhost:19092",
         value_serializer=lambda v: v,
-        security_protocol="SASL_PLAINTEXT",
-        sasl_mechanism="SCRAM-SHA-256",
-        sasl_plain_username="superuser",
-        sasl_plain_password="secretpassword",
     )
+
     with h5py.File("MER72596.nxs", "r") as f:
         group = f["/raw_data_1/detector_1_events"]
         print("before source")
@@ -79,6 +88,14 @@ def main():
         end_us = source._convert_pulse_time(source._event_time_zero[-1])
         duration_sec = (end_us - start_us) * 1e-9
         print(f"Total simulated duration: {duration_sec / 60:.2f} minutes")
+        instrument = None
+        run_name = ""
+        start_time = int(datetime.datetime.fromisoformat(f["/raw_data_1/start_time"][0].decode("utf-8")).timestamp())
+        end_time = int(datetime.datetime.fromisoformat(f["/raw_data_1/end_time"][0].decode("utf-8")).timestamp())
+
+        producer.send(f"{instrument}_runInfo", build_run_stop(stop_time=start_time, run_name="Some previous run"))
+        producer.send(f"{instrument}_runInfo", build_run_start(start_time=start_time, run_name=run_name, instrument_name=instrument))
+        producer.flush()
 
         for index, (tofs, ids, pulse_time) in enumerate(source.get_data()):
             if tofs is None:
@@ -93,8 +110,6 @@ def main():
                 time.sleep(sleep)
 
             MAX_EVENTS = 10
-            event_time_offset = tofs[:MAX_EVENTS].tolist()
-            event_id = ids[:MAX_EVENTS].tolist()
             ev42_message = {
                 "message_type": "ev42",
                 "message_id": index,
@@ -105,8 +120,10 @@ def main():
                 # "event_id": event_id,
             }
 
-            producer.send("fake_merlin", (build_ev42_from_dict(ev42_message)))
+            producer.send("MERLIN_events", (build_ev42_from_dict(ev42_message)))
             producer.flush()
-
+        producer.send(f"{instrument}_runInfo", build_run_stop(stop_time=end_time,
+                                                              run_name="Some previous run"))
+        producer.flush()
 
 main()
