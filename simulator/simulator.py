@@ -51,9 +51,11 @@ def build_ev42_from_dict(ev42_message: dict) -> bytes:
 
 def build_run_stop(stop_time, run_name):
     builder = flatbuffers.Builder(initialSize=1024)
+    # Create string first before starting the message
+    run_name_offset = builder.CreateString(run_name)
     RunStop.Start(builder)
     RunStop.AddStopTime(builder, stop_time)
-    RunStop.AddRunName(builder, run_name)
+    RunStop.AddRunName(builder, run_name_offset)
     msg = RunStop.End(builder)
     builder.Finish(msg, file_identifier=b"pl72")
     return bytes(builder.Output())
@@ -61,10 +63,13 @@ def build_run_stop(stop_time, run_name):
 
 def build_run_start(start_time, run_name, instrument_name):
     builder = flatbuffers.Builder(initialSize=1024)
+    # Create strings first before starting the message
+    run_name_offset = builder.CreateString(run_name)
+    instrument_name_offset = builder.CreateString(instrument_name)
     RunStart.Start(builder)
     RunStart.AddStartTime(builder, start_time)
-    RunStart.AddRunName(builder, run_name)
-    RunStart.AddInstrumentName(builder, instrument_name)
+    RunStart.AddRunName(builder, run_name_offset)
+    RunStart.AddInstrumentName(builder, instrument_name_offset)
     msg = RunStart.End(builder)
     builder.Finish(msg, file_identifier=b"6s4t")
     return bytes(builder.Output())
@@ -88,12 +93,14 @@ def main():
         end_us = source._convert_pulse_time(source._event_time_zero[-1])
         duration_sec = (end_us - start_us) * 1e-9
         print(f"Total simulated duration: {duration_sec / 60:.2f} minutes")
-        instrument = None
-        run_name = ""
+        instrument = f["/raw_data_1/instrument_name"][0].decode("utf-8").strip() if "/raw_data_1/instrument_name" in f else "MERLIN"
+        run_title = f["/raw_data_1/title"][0].decode("utf-8").strip()
+        run_name = run_title if run_title else f"MER72596_{int(time.time())}"
         start_time = int(datetime.datetime.fromisoformat(f["/raw_data_1/start_time"][0].decode("utf-8")).timestamp())
         end_time = int(datetime.datetime.fromisoformat(f["/raw_data_1/end_time"][0].decode("utf-8")).timestamp())
 
-        producer.send(f"{instrument}_runInfo", build_run_stop(stop_time=start_time, run_name="Some previous run"))
+        # Send RunStop for any previous run first, then submit start
+        producer.send(f"{instrument}_runInfo", build_run_stop(stop_time=start_time, run_name=f"{instrument}_previous_run"))        
         producer.send(f"{instrument}_runInfo", build_run_start(start_time=start_time, run_name=run_name, instrument_name=instrument))
         producer.flush()
 
