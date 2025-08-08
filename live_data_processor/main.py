@@ -123,12 +123,12 @@ def initialize_instrument_workspace(run_start: RunStart) -> None:
     run_name = run_start.RunName()
     run_name = run_name.decode("utf-8")
     logger.info(f"New run started: {run_name}")
-    # LoadEmptyInstrument(InstrumentName=INSTRUMENT, OutputWorkspace=LIVE_WS_NAME, MakeEventWorkspace=True)
-    LoadEmptyInstrument(
-        OutputWorkspace="lives",
-        Filename="/Users/sham/miniconda3/envs/mantid/instrument/MERLIN_Definition.xml",
-        MakeEventWorkspace=True,
-    )
+    LoadEmptyInstrument(InstrumentName=INSTRUMENT, OutputWorkspace=LIVE_WS_NAME, MakeEventWorkspace=True)
+    # LoadEmptyInstrument(
+    #     OutputWorkspace="lives",
+    #     Filename="/Users/sham/miniconda3/envs/mantid/instrument/MERLIN_Definition.xml",
+    #     MakeEventWorkspace=True,
+    # )
 
 
 def seek_event_consumer_to_runstart(run_start: RunStart, events_consumer: KafkaConsumer) -> None:
