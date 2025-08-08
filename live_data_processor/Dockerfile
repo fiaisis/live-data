@@ -7,5 +7,6 @@ COPY ./simulator simulator/
 
 RUN pip install kafka-python==2.2.15
 RUN pip install pyepics
+RUN pip install flatbuffers==25.2.10
 
 ENTRYPOINT ["python", "main.py"]
