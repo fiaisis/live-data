@@ -107,7 +107,7 @@ def get_file_from_request(url: str, path: str) -> None:
         raise RuntimeError(f"Reduction not possible with missing resource {url}")
 
 
-git_sha = "5a0b0a76caad4252465e9f889fbe18f82dd41d47"
+git_sha = "b1bde83e5f3b3d203ffa77aef8f58ff9d782aa79"
 # Only needed for fixes with regards to reductions during MARI issues
 get_file_from_request(
     f"https://raw.githubusercontent.com/mantidproject/direct_reduction/{git_sha}/reduction_files/reduction_utils.py",
