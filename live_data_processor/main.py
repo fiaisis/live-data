@@ -1,5 +1,5 @@
 import pydevd_pycharm
-pydevd_pycharm.settrace('185.241.227.139', port=6666, stdoutToServer=True, stderrToServer=True)
+pydevd_pycharm.settrace('94.174.154.158', port=666, stdoutToServer=True, stderrToServer=True)
 """
 This module provides functionality for live data processing using the Mantid framework.
 
