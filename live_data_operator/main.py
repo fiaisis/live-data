@@ -37,6 +37,8 @@ from kubernetes.client import (  # type: ignore
 )
 
 
+GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
+
 class EndpointFilter(logging.Filter):
     """
     A logging filter to exclude health and readiness probe messages.
@@ -252,7 +254,7 @@ def setup_deployment(
             V1VolumeMount(name="ceph-mount", mount_path="/output"),
             V1VolumeMount(name="archive-mount", mount_path="/archive"),
         ],
-        env=[V1EnvVar(name="INSTRUMENT", value=instrument)],
+        env=[V1EnvVar(name="INSTRUMENT", value=instrument), V1EnvVar(name="GITHUB_API_TOKEN", value=GITHUB_API_TOKEN)],
     )
     pod_spec = V1PodSpec(
         containers=[container],

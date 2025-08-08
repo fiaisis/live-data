@@ -39,6 +39,7 @@ KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
 INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
 SCRIPT_REFRESH_TIME = int(os.environ.get("INGEST_WAIT", "30"))
 LIVE_WS_NAME = os.environ.get("LIVE_WS", "lives")
+GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
 
 
 # Local Dev only
@@ -57,12 +58,15 @@ def get_script() -> str:
     :raises RuntimeError: If the script could not be retrieved or the response status code indicates an error.
     """
     logger.info("Getting latest sha")
-    script_sha = requests.get("https://api.github.com/repos/fiaisis/autoreduction-scripts/branches/main").json()[
+    script_sha = requests.get("https://api.github.com/repos/fiaisis/autoreduction-scripts/branches/main",
+                              headers={"Authorization": f"Bearer {GITHUB_API_TOKEN}"}
+                              ).json()[
         "commit"
     ]["sha"]
     logger.info("Attempting to get latest %s script...", INSTRUMENT)
     response = requests.get(
         f"https://raw.githubusercontent.com/fiaisis/autoreduction-scripts/{script_sha}/{INSTRUMENT}/live_data.py?v=1",
+        headers={"Authorization": f"Bearer {GITHUB_API_TOKEN}"},
         timeout=30,
     )
     if response.status_code != HTTPStatus.OK:
