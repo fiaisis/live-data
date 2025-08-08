@@ -60,11 +60,9 @@ def get_script() -> str:
     :raises RuntimeError: If the script could not be retrieved or the response status code indicates an error.
     """
     logger.info("Getting latest sha")
-    script_sha = requests.get("https://api.github.com/repos/fiaisis/autoreduction-scripts/branches/main",
-                              headers={"Authorization": f"Bearer {GITHUB_API_TOKEN}"}
-                              ).json()[
-        "commit"
-    ]["sha"]
+    response = requests.get("https://api.github.com/repos/fiaisis/autoreduction-scripts/branches/main",
+                              headers={"Authorization": f"Bearer {GITHUB_API_TOKEN}"})
+    script_sha = response.json()["commit" ]["sha"]
     logger.info("Attempting to get latest %s script...", INSTRUMENT)
     response = requests.get(
         f"https://raw.githubusercontent.com/fiaisis/autoreduction-scripts/{script_sha}/{INSTRUMENT}/live_data.py?v=1",
