@@ -229,6 +229,7 @@ for ei in ei_list:
     print(f"{ei:g}meV:")
     print(mtd.getObjectNames())
     for w in mtd.getObjectNames():
+        print(w)
         if f"{wsname}_{ei:g}meV" in w and w.endswith("_ang_md"):
             allws.append(w)
     wsout = MergeMD(",".join(allws), OutputWorkspace=f"MER{runno}_{ei:g}meV_1to1_md")
