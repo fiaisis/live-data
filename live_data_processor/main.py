@@ -10,17 +10,20 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
+from collections.abc import Callable
 from http import HTTPStatus
 from typing import Any
 
 import requests
 from kafka import KafkaConsumer, TopicPartition
-from mantid import config
 from mantid.api import mtd
 from mantid.kernel import DateAndTime
 from mantid.simpleapi import LoadEmptyInstrument
 
+from live_data_processor.collectors import get_misc_data_collector
+from live_data_processor.exceptions import TopicIncompleteError
 from simulator.compiled_schemas.EventMessage import EventMessage
 from simulator.compiled_schemas.RunStart import RunStart
 
@@ -40,14 +43,30 @@ INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
 SCRIPT_REFRESH_TIME = int(os.environ.get("INGEST_WAIT", "30"))
 LIVE_WS_NAME = os.environ.get("LIVE_WS", "lives")
 GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
+os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
+os.environ["EPICS_CA_ADDR_LIST"] = "130.246.39.152:5066"
+os.environ["EPICS_CA_AUTO_ADDR_LIST"] = "NO"
 
 
 # Local Dev only
 # config["defaultsave.directory"] = "~/Downloads"
 
 
-class TopicIncompleteError(RuntimeError):
-    """Raised when the Kafka topic is not yet complete"""
+def _create_run_identifier(run_start: RunStart | None) -> tuple[str, str] | None:
+    """
+    Given a run start message, create a run identifier
+
+    :param run_start: The run start message
+    :return: A tuple containing the start time and run name
+    """
+    if run_start is None:
+        return None
+    return str(run_start.StartTime()), str(run_start.RunName())
+
+
+class RunContext:
+    def __init__(self, get_current_run: Callable[[], RunStart | None]) -> None:
+        self.get_current_run = get_current_run
 
 
 def get_script() -> str:
@@ -55,11 +74,10 @@ def get_script() -> str:
     Fetch the latest live data processing script for a specific instrument.
 
     :returns: The content of the live data processing script as a string.
-    :raises RuntimeError: If the script could not be retrieved or the response status code indicates an error.
     """
     logger.info("Getting latest sha")
     response = requests.get("https://api.github.com/repos/fiaisis/autoreduction-scripts/branches/main")
-    script_sha = response.json()["commit" ]["sha"]
+    script_sha = response.json()["commit"]["sha"]
     logger.info("Attempting to get latest %s script...", INSTRUMENT)
     response = requests.get(
         f"https://raw.githubusercontent.com/fiaisis/autoreduction-scripts/{script_sha}/{INSTRUMENT}/live_data.py?v=1",
@@ -69,11 +87,6 @@ def get_script() -> str:
         raise RuntimeError("Failed to obtain script from remote, recieved status code: %s", response.status_code)
     logger.info("Successfully obtained %s script", INSTRUMENT)
     return response.text
-
-
-
-
-
 
 
 def find_latest_run_start(runinfo_consumer: KafkaConsumer) -> RunStart | None:
@@ -245,6 +258,33 @@ def start_live_reduction(
     :return: None
     """
     current_run_start = initialize_run(events_consumer, runinfo_consumer, run_start)
+
+    current_run_lock = threading.Lock()
+
+    def get_current_run() -> RunStart:
+        with current_run_lock:
+            return current_run_start
+
+    run_context = RunContext(get_current_run)
+
+    misc_data_collector = get_misc_data_collector(INSTRUMENT)
+
+    misc_data_collector.on_run_start(run_context)
+
+    stop_event: threading.Event | None = None
+    misc_data_collector_thread = threading.Thread(
+        target=misc_data_collector.run_forever, args=(run_context, stop_event)
+    )
+    if misc_data_collector.will_run_forever:
+        stop_event = threading.Event()
+        md_thread = threading.Thread(
+            target=misc_data_collector.run_forever,
+            args=(run_context, stop_event),
+            name=f"{INSTRUMENT}-misc-collector",
+            daemon=True,
+        )
+        md_thread.start()
+
     logger.info("Starting live data reduction loop")
     loop_start_time = datetime.datetime.now()
     for message in events_consumer:
@@ -261,7 +301,7 @@ def start_live_reduction(
             except RuntimeError as exc:
                 logger.warning("Could not get latest script, continuing with current script", exc_info=exc)
         try:
-            exec(script)
+            exec(script)  # noqa: S102
         except Exception as exc:
             logger.warning("Error occurred in reduction, waiting 15 seconds and restarting loop", exc_info=exc)
             time.sleep(15)
@@ -270,6 +310,12 @@ def start_live_reduction(
         # Check if we should move onto next workspace
         latest_runstart = find_latest_run_start(runinfo_consumer)
         if latest_runstart != current_run_start:
+            with current_run_lock:
+                current_run_start = latest_runstart
+
+            if stop_event is not None:
+                stop_event.set()
+                misc_data_collector_thread.join(timeout=2)
             start_live_reduction(script, events_consumer, runinfo_consumer, latest_runstart)
 
 

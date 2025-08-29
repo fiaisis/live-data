@@ -39,6 +39,7 @@ from kubernetes.client import (  # type: ignore
 
 GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
 
+
 class EndpointFilter(logging.Filter):
     """
     A logging filter to exclude health and readiness probe messages.
