@@ -17,6 +17,7 @@ External dependencies used by implementations here:
 """
 
 import datetime
+import logging
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -24,7 +25,9 @@ from abc import ABC, abstractmethod
 from epics import caget
 from mantid.simpleapi import AddTimeSeriesLog
 
-from live_data_processor.main import RunContext, _create_run_identifier, logger
+from live_data_processor.runs import _create_run_identifier, RunContext
+
+logger = logging.getLogger(__name__)
 
 
 class MiscDataCollector(ABC):
@@ -41,8 +44,8 @@ class MiscDataCollector(ABC):
       on a background thread until stop_event is set.
     """
 
-    @abstractmethod
     @property
+    @abstractmethod
     def will_run_forever(self) -> bool:
         """
         Indicates whether this collector should run continuously on a background thread.
@@ -114,6 +117,8 @@ class MerlinCollector(MiscDataCollector):
             tick_id = _create_run_identifier(ctx.get_current_run())
             try:
                 rot = caget("IN:MERLIN:CS:SB:Rot", timeout=0.5)
+            except TimeoutError:
+                rot = None
             except Exception as exc:
                 logger.warning("MERLIN EPICS read failed", exc_info=exc)
                 rot = None
@@ -141,8 +146,11 @@ def get_misc_data_collector(instrument: str) -> MiscDataCollector:
     :return: A concrete MiscDataCollector implementation for the instrument.
     :raises ValueError: If the instrument is not supported.
     """
+    logger.info(instrument)
     match instrument.lower():
         case "merlin":
+            return MerlinCollector()
+        case "scidemo":
             return MerlinCollector()
         case _:
             raise ValueError(f"Unsupported instrument for MiscDataCollector: {instrument}")

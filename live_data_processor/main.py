@@ -12,33 +12,36 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Callable
-from http import HTTPStatus
-from typing import Any
 
-import requests
-from kafka import KafkaConsumer, TopicPartition
+from kafka import KafkaConsumer
 from mantid.api import mtd
 from mantid.kernel import DateAndTime
 from mantid.simpleapi import LoadEmptyInstrument
 
 from live_data_processor.collectors import get_misc_data_collector
 from live_data_processor.exceptions import TopicIncompleteError
-from simulator.compiled_schemas.EventMessage import EventMessage
-from simulator.compiled_schemas.RunStart import RunStart
+from live_data_processor.kafka_io import find_latest_run_start, seek_event_consumer_to_runstart, setup_consumers
+from live_data_processor.runs import RunContext
+from live_data_processor.scripts import get_script
+from schemas.compiled_schemas.EventMessage import EventMessage
+from schemas.compiled_schemas.RunStart import RunStart
 
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
 logging.basicConfig(
     handlers=[stdout_handler],
     format="[%(asctime)s]-%(name)s-%(levelname)s: %(message)s",
-    level=logging.INFO,
+    level=logging.DEBUG,
 )
+
+logging.getLogger("kafka").setLevel(logging.WARNING)
+logging.getLogger("kafka.conn").setLevel(logging.WARNING)
+logging.getLogger("kafka.client").setLevel(logging.WARNING)
+logging.getLogger("kafka.metrics").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/output")
-KAFKA_IP = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
-KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
+
 INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
 SCRIPT_REFRESH_TIME = int(os.environ.get("INGEST_WAIT", "30"))
 LIVE_WS_NAME = os.environ.get("LIVE_WS", "lives")
@@ -50,81 +53,6 @@ os.environ["EPICS_CA_AUTO_ADDR_LIST"] = "NO"
 
 # Local Dev only
 # config["defaultsave.directory"] = "~/Downloads"
-
-
-def _create_run_identifier(run_start: RunStart | None) -> tuple[str, str] | None:
-    """
-    Given a run start message, create a run identifier
-
-    :param run_start: The run start message
-    :return: A tuple containing the start time and run name
-    """
-    if run_start is None:
-        return None
-    return str(run_start.StartTime()), str(run_start.RunName())
-
-
-class RunContext:
-    def __init__(self, get_current_run: Callable[[], RunStart | None]) -> None:
-        self.get_current_run = get_current_run
-
-
-def get_script() -> str:
-    """
-    Fetch the latest live data processing script for a specific instrument.
-
-    :returns: The content of the live data processing script as a string.
-    """
-    logger.info("Getting latest sha")
-    response = requests.get("https://api.github.com/repos/fiaisis/autoreduction-scripts/branches/main")
-    script_sha = response.json()["commit"]["sha"]
-    logger.info("Attempting to get latest %s script...", INSTRUMENT)
-    response = requests.get(
-        f"https://raw.githubusercontent.com/fiaisis/autoreduction-scripts/{script_sha}/{INSTRUMENT}/live_data.py?v=1",
-        timeout=30,
-    )
-    if response.status_code != HTTPStatus.OK:
-        raise RuntimeError("Failed to obtain script from remote, recieved status code: %s", response.status_code)
-    logger.info("Successfully obtained %s script", INSTRUMENT)
-    return response.text
-
-
-def find_latest_run_start(runinfo_consumer: KafkaConsumer) -> RunStart | None:
-    """
-    Find the latest RunStart message in the runinfo topic.
-
-    This function seeks to the end of the runinfo topic, retrieves the last few messages,
-    and searches for the most recent RunStart message.
-
-    :param runinfo_consumer: The Kafka consumer for the runinfo topic.
-    :return: The latest RunStart message if found, None otherwise.
-    :raises TopicIncompleteError: If the topic does not have any messages.
-    """
-    logger.info("Attempting to find latest run start")
-    latest_start = None
-
-    logger.info("Seeking to end of runinfo topic")
-    # Set the offset to 3 messages from the end.
-    tp = TopicPartition(f"{INSTRUMENT}_runInfo", 0)
-    logger.info("Topic partition: %s", tp)
-    end_offset = runinfo_consumer.end_offsets([tp])
-    runinfo_consumer.seek(tp, end_offset[tp] - 3)
-
-    logger.info("Reading messages from runinfo topic")
-    # Grab the last 3 messages, reverse their order then find the latest runstart by iterating through.
-    messages = []
-    for index, message in enumerate(runinfo_consumer):
-        messages.append(message.value)
-        if index == 2:
-            break
-    if len(messages) < 1:
-        raise TopicIncompleteError("Topic does not have any messages from which to read. %s", f"{INSTRUMENT}_runInfo")
-    logger.info("Found %s messages in runinfo topic", len(messages))
-    for message in reversed(messages):
-        if RunStart.RunStartBufferHasIdentifier(message, 0):
-            latest_start = RunStart.GetRootAs(message, 0)
-            break
-    return latest_start
 
 
 def initialize_instrument_workspace(run_start: RunStart) -> None:
@@ -141,28 +69,12 @@ def initialize_instrument_workspace(run_start: RunStart) -> None:
     run_name = run_start.RunName()
     run_name = run_name.decode("utf-8")
     logger.info(f"New run started: {run_name}")
-    LoadEmptyInstrument(InstrumentName=INSTRUMENT, OutputWorkspace=LIVE_WS_NAME, MakeEventWorkspace=True)
-    # LoadEmptyInstrument(
-    #     OutputWorkspace="lives",
-    #     Filename="/Users/sham/miniconda3/envs/mantid/instrument/MERLIN_Definition.xml",
-    #     MakeEventWorkspace=True,
-    # )
-
-
-def seek_event_consumer_to_runstart(run_start: RunStart, events_consumer: KafkaConsumer) -> None:
-    """
-    Adjust the given event consumer's position to the beginning of the given run
-    :param run_start: The run start message to seek to.
-    :param events_consumer: The event consumer to seek to the run start message in.
-    :return: None
-    """
-    logger.info("Seeking event consumer to run start")
-    run_start_ms = run_start.StartTime()
-
-    # Find the offset for a given time and seek to it
-    topic_partition = TopicPartition(f"{INSTRUMENT}_events", 0)
-    offset_info = events_consumer.offsets_for_times({topic_partition: run_start_ms})[topic_partition]
-    events_consumer.seek(topic_partition, offset_info.offset)
+    # LoadEmptyInstrument(InstrumentName=INSTRUMENT, OutputWorkspace=LIVE_WS_NAME, MakeEventWorkspace=True)
+    LoadEmptyInstrument(
+        OutputWorkspace="lives",
+        Filename="/Users/sham/miniconda3/envs/mantid/instrument/MERLIN_Definition.xml",
+        MakeEventWorkspace=True,
+    )
 
 
 def process_events(events: EventMessage):
@@ -203,18 +115,7 @@ def _shutdown(signum, frame):
     sys.exit(0)
 
 
-def setup_consumers(kafka_config: dict[str, Any]) -> tuple[KafkaConsumer, KafkaConsumer]:
-    """
-    Given a kafka config, setup the consumers for events and runinfo
-    :param kafka_config: The kafka config to use for the consumers.
-    :return: A tuple of KafkaConsumer objects for events and runinfo.
-    """
-    events_consumer = KafkaConsumer(f"{INSTRUMENT}_events", **kafka_config)
-    runinfo_consumer = KafkaConsumer(f"{INSTRUMENT}_runInfo", **kafka_config)
-    return events_consumer, runinfo_consumer
-
-
-def initialize_run(events_consumer, runinfo_consumer, run_start: RunStart | None = None) -> RunStart:
+def initialize_run(events_consumer: KafkaConsumer, runinfo_consumer: KafkaConsumer, run_start: RunStart | None = None) -> RunStart:
     """
     Initialize a run by finding the latest run start message, processing it, and seeking the event consumer.
 
@@ -230,11 +131,11 @@ def initialize_run(events_consumer, runinfo_consumer, run_start: RunStart | None
     logger.info("Initializing run: %s", str(run_start))
     if run_start is None:
         logger.info("Run Start is None")
-        run_start = find_latest_run_start(runinfo_consumer)
+        run_start = find_latest_run_start(INSTRUMENT, runinfo_consumer)
         if run_start is None:
             raise TopicIncompleteError("No RunStart found in runInfo")
     initialize_instrument_workspace(run_start)
-    seek_event_consumer_to_runstart(run_start, events_consumer)
+    seek_event_consumer_to_runstart(INSTRUMENT, run_start, events_consumer)
     return run_start
 
 
@@ -288,12 +189,12 @@ def start_live_reduction(
     logger.info("Starting live data reduction loop")
     loop_start_time = datetime.datetime.now()
     for message in events_consumer:
-        logger.info("Received event message" + str(message.value))
+        logger.info("Received event message")
         events = EventMessage.GetRootAs(message.value, 0)
         process_events(events)
         if (datetime.datetime.now() - loop_start_time).total_seconds() > SCRIPT_REFRESH_TIME:
             try:
-                new_script = get_script()
+                new_script = get_script(INSTRUMENT)
                 if script != new_script:
                     logger.info("New Script detected, restarting with new script")
                     script = new_script
@@ -308,7 +209,7 @@ def start_live_reduction(
             continue
 
         # Check if we should move onto next workspace
-        latest_runstart = find_latest_run_start(runinfo_consumer)
+        latest_runstart = find_latest_run_start(INSTRUMENT, runinfo_consumer)
         if latest_runstart != current_run_start:
             with current_run_lock:
                 current_run_start = latest_runstart
@@ -335,18 +236,10 @@ def main() -> None:
     signal.signal(signal.SIGINT, _shutdown)
 
     # Setup consumers
-    kafka_config = {
-        "bootstrap_servers": f"{KAFKA_IP}:{KAFKA_PORT}",
-        "auto_offset_reset": "latest",
-        "enable_auto_commit": True,
-        "request_timeout_ms": 60000,
-        "session_timeout_ms": 60000,
-        "security_protocol": "PLAINTEXT",
-        "api_version_auto_timeout_ms": 60000,
-    }
-    events_consumer, runinfo_consumer = setup_consumers(kafka_config)
 
-    script = get_script()
+    events_consumer, runinfo_consumer = setup_consumers()
+
+    script = get_script(INSTRUMENT)
     start_live_reduction(script, events_consumer, runinfo_consumer)
 
 
