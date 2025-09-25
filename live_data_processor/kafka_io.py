@@ -140,6 +140,7 @@ def seek_event_consumer_to_runstart(instrument: str, run_start: RunStart, events
                 fallback,
                 ends[tp],
             )
+            # Probably should add some exception here instead of just falling back to beginning
             events_consumer.seek(tp, fallback)
         else:
             logger.info("Seeking %s to offset %s at event timestamp %s.", tp, oat.offset, oat.timestamp)
