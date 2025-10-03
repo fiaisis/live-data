@@ -5,6 +5,8 @@
 import flatbuffers
 from flatbuffers.compat import import_numpy
 
+from schemas.compiled_schemas.SpectraDetectorMapping import SpectraDetectorMapping
+
 np = import_numpy()
 
 
@@ -106,7 +108,6 @@ class RunStart(object):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             x = self._tab.Indirect(o + self._tab.Pos)
-            from SpectraDetectorMapping import SpectraDetectorMapping
 
             obj = SpectraDetectorMapping()
             obj.Init(self._tab.Bytes, x)

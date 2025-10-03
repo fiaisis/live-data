@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import datetime
+from typing import Any
 
 from kafka import KafkaConsumer, TopicPartition
 from kafka.structs import OffsetAndTimestamp
@@ -15,10 +16,11 @@ KAFKA_IP = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
 KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
 
 
+
 def datetime_from_record_timestamp(timestamp: int) -> str:
     return datetime.fromtimestamp(timestamp/1000.).strftime("%Y-%m-%d %H:%M:%S")
 
-def find_latest_run_start(instrument: str, runinfo_consumer: KafkaConsumer, lookback=50) -> RunStart | None:
+def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> RunStart | None:
     """
     Find the latest RunStart message in the runinfo topic.
 
@@ -29,72 +31,27 @@ def find_latest_run_start(instrument: str, runinfo_consumer: KafkaConsumer, look
     :return: The latest RunStart message if found, None otherwise.
     :raises TopicIncompleteError: If the topic does not have any messages.
     """
-    logger.info("==== Starting find_latest_runstarts ====")
-    topic=f"{instrument}_runInfo"
-    # Discover partitions
-    partition_ids = runinfo_consumer.partitions_for_topic(topic)
-    logger.debug("Discovered partitions for topic %s: %s", topic, partition_ids)
-    if not partition_ids:
-        raise TopicIncompleteError(f"Topic {topic} has no partitions")
+    latest_start = None
 
-    partitions = [TopicPartition(topic, pid) for pid in partition_ids]
+    # logger.info("Seeking to end of runinfo topic")
+    # Set the offset to 3 messages from the end.
+    tp = TopicPartition(f"{instrument}_runInfo", 0)
+    end_offset = runinfo_consumer.end_offsets([tp])
+    runinfo_consumer.seek(tp, end_offset[tp] - 3)
 
-    # Find the end offset for each partition
-    end_offsets = runinfo_consumer.end_offsets(partitions)  # {TopicPartition: end_offset}
-    logger.debug("End offsets: %s", {p.partition: end_offsets[p] for p in partitions})
-    if all(end_offsets[p] == 0 for p in partitions):
-        raise TopicIncompleteError(f"Topic {topic} has no messages")
-
-    # Assign and seek near the end of each partition
-    runinfo_consumer.assign(partitions)
-    for partition in partitions:
-        start_offset = max(0, end_offsets[partition] - lookback)
-        runinfo_consumer.seek(partition, start_offset)
-        logger.info(
-            "Seeking partition %d to offset %d (end=%d, lookback=%d)",
-            partition.partition, start_offset, end_offsets[partition], lookback
-        )
-
-    # Read forward until we reach the end of each partition
-    finished_partitions = set()
-    runstarts = []  # (timestamp_ms, raw_bytes)
-
-    logger.info("Polling for messages...")
-    while len(finished_partitions) < len(partitions):
-        records_map = runinfo_consumer.poll(timeout_ms=500)
-        if not records_map:
-            logger.debug("No messages returned in this poll")
+    # Grab the last 3 messages, reverse their order, then find the latest runstart by iterating through.
+    messages = []
+    for index, message in enumerate(runinfo_consumer):
+        messages.append(message.value)
+        if index == 2:
             break
-
-        for partition_obj, records in records_map.items():
-            logger.debug("Got %d records from partition %d", len(records), partition_obj.partition)
-            for record in records:
-                # Collect Messages
-                if RunStart.RunStartBufferHasIdentifier(record.value, 0):
-                    ts_ms = record.timestamp
-                    runstarts.append((ts_ms, record.value))
-                    logger.info(
-                        "Found RunStart at offset %d in partition %d at %s",
-                        record.offset, partition_obj.partition, datetime_from_record_timestamp(record.timestamp)
-                    )
-                # Mark partition finished when we hit its last offset
-                if record.offset >= end_offsets[partition_obj] - 1:
-                    logger.info("Finished reading partition %d", partition_obj.partition)
-                    finished_partitions.add(partition_obj)
-
-    # Sort globally by timestamp and return the newest N
-    runstarts.sort(key=lambda item: item[0])
-
-    if len(runstarts) > 3:
-        latest = runstarts[-3:]
-    else:
-        latest = runstarts
-
-    logger.info("Total RunStarts found: %d", len(runstarts))
-    logger.info("Returning %d latest RunStarts", len(latest))
-    logger.info("==== Finished find_latest_runstarts ====")
-
-    return [RunStart.GetRootAs(raw, 0) for _, raw in reversed(latest)][0] if latest else None
+    if len(messages) < 1:
+        raise TopicIncompleteError("Topic does not have any messages from which to read. %s", f"{instrument}_runInfo")
+    for message in reversed(messages):
+        if RunStart.RunStartBufferHasIdentifier(message, 0):
+            latest_start = RunStart.GetRootAs(message, 0)
+            break
+    return latest_start
 
 
 def seek_event_consumer_to_runstart(instrument: str, run_start: RunStart, events_consumer: KafkaConsumer) -> None:
@@ -105,53 +62,19 @@ def seek_event_consumer_to_runstart(instrument: str, run_start: RunStart, events
     :return: None
     """
     logger.info("Seeking event consumer to run start")
-    run_start_ms = run_start.StartTime() // 1000
+    run_start_ms = run_start.StartTime()
+
+    # Find the offset for a given time and seek to it
+    topic_partition = TopicPartition(f"{instrument}_events", 0)
+    offset_info = events_consumer.offsets_for_times({topic_partition: run_start_ms})[topic_partition]
+    events_consumer.seek(topic_partition, offset_info.offset)
 
 
-    logger.info("Seeking event consumer to run start")
-    logger.info("RunStart raw ts=%s, using ts_ms=%s", run_start.StartTime(), run_start_ms)
-
-    topic = f"{instrument}_events"
-
-    # Ensure we know partitions
-    partition_ids = events_consumer.partitions_for_topic(topic)
-    if not partition_ids:
-        raise TopicIncompleteError(f"Topic {topic} has no partitions")
-
-    partitions = [TopicPartition(topic, pid) for pid in partition_ids]
-
-    events_consumer.assign(partitions)
-    events_consumer.poll(timeout_ms=0)
-
-    query = {tp: run_start_ms for tp in partitions}
-    results = events_consumer.offsets_for_times(query)
-
-    begins = events_consumer.beginning_offsets(partitions)
-    ends = events_consumer.end_offsets(partitions)
-
-    for tp in partitions:
-        oat: OffsetAndTimestamp | None = results.get(tp)
-        if oat is None:
-            fallback = begins[tp]
-            logger.warning(
-                "No offset found at/after %s ms in %s. Seeking to beginning offset %s (end=%s).",
-                run_start_ms,
-                tp,
-                fallback,
-                ends[tp],
-            )
-            # Probably should add some exception here instead of just falling back to beginning
-            events_consumer.seek(tp, fallback)
-        else:
-            logger.info("Seeking %s to offset %s at event timestamp %s.", tp, oat.offset, oat.timestamp)
-            events_consumer.seek(tp, oat.offset)
-
-
-def setup_consumers() -> tuple[KafkaConsumer, KafkaConsumer]:
+def setup_consumers(instrument: str, kafka_config: dict[str, Any]) -> tuple[KafkaConsumer, KafkaConsumer]:
     """
     Create the consumers for events and runinfo
     :return: A tuple of KafkaConsumer objects for events and runinfo.
     """
-    events_consumer = KafkaConsumer(bootstrap_servers=[f"{KAFKA_IP}:{KAFKA_PORT}"], auto_offset_reset="earliest")
-    runinfo_consumer = KafkaConsumer(bootstrap_servers=[f"{KAFKA_IP}:{KAFKA_PORT}"], auto_offset_reset="earliest")
+    events_consumer = KafkaConsumer(f"{instrument}_events",  **kafka_config)
+    runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo",  **kafka_config)
     return events_consumer, runinfo_consumer

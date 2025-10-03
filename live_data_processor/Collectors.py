@@ -18,6 +18,7 @@ External dependencies used by implementations here:
 
 import datetime
 import logging
+import os
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -67,6 +68,23 @@ class MiscDataCollector(ABC):
         """
         return
 
+    def on_run_end(self, ctx: RunContext) -> None:
+        """Hook that is invoked when a run ends.
+        Ovveride to perform any one-off cleanup that should occur once per run.
+
+        :param ctx: RunContext giving access to the current RunStart and helpers.
+        :return: None
+        """
+        return
+
+    def on_pre_exec(self, ctx: RunContext) -> None:
+        """Hook that is invoked before the script is executed.
+        Ovveride to perform any one-off setup that should occur once per pre script execution.
+        :param ctx: RunContext giving access to the current RunStart and helpers.
+        :return: None
+        """
+        return
+
     def run_forever(self, ctx: RunContext, stop_event: threading.Event) -> None:
         """
         Run the collector loop until stop_event is set.
@@ -111,6 +129,7 @@ class MerlinCollector(MiscDataCollector):
         :param stop_event: Event used to request termination of the loop.
         :return: None
         """
+        os.unlink("merlin-rot-log")
         next_tick = time.monotonic()
         while not stop_event.is_set():
             # 1st run check
@@ -125,12 +144,8 @@ class MerlinCollector(MiscDataCollector):
 
             # 2nd run check, this ensures time series log will only be added if the rotation is for the same run
             if rot is not None and _create_run_identifier(ctx.get_current_run()) == tick_id:
-                AddTimeSeriesLog(
-                    "lives",
-                    "Rot",
-                    datetime.datetime.now().isoformat(),
-                    rot,
-                )
+                with open("merlin-rot-log", "a+") as fle:
+                    fle.write((datetime.datetime.now().isoformat() + "," + str(rot)) +"\n")
 
             next_tick += 1.0
             delay = next_tick - time.monotonic()

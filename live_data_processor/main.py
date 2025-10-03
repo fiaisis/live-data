@@ -1,28 +1,21 @@
-"""
-This module provides functionality for live data processing using the Mantid framework.
-
-It includes utilities for retrieving Mantid-compatible processing scripts for specific instruments,
-initiating live data processing, and handling clean shutdowns in response to system signals.
-"""
-
 import datetime
 import logging
+import multiprocessing
 import os
 import signal
 import sys
-import threading
 import time
 
 from kafka import KafkaConsumer
 from mantid.api import mtd
 from mantid.kernel import DateAndTime
-from mantid.simpleapi import LoadEmptyInstrument
 
-from live_data_processor.collectors import get_misc_data_collector
+from live_data_processor.Collectors import get_misc_data_collector
 from live_data_processor.exceptions import TopicIncompleteError
 from live_data_processor.kafka_io import find_latest_run_start, seek_event_consumer_to_runstart, setup_consumers
 from live_data_processor.runs import RunContext
 from live_data_processor.scripts import get_script
+from live_data_processor.workspaces import initialize_instrument_workspace
 from schemas.compiled_schemas.EventMessage import EventMessage
 from schemas.compiled_schemas.RunStart import RunStart
 
@@ -30,54 +23,38 @@ stdout_handler = logging.StreamHandler(stream=sys.stdout)
 logging.basicConfig(
     handlers=[stdout_handler],
     format="[%(asctime)s]-%(name)s-%(levelname)s: %(message)s",
-    level=logging.DEBUG,
+    level=logging.INFO,
 )
 
-logging.getLogger("kafka").setLevel(logging.WARNING)
-logging.getLogger("kafka.conn").setLevel(logging.WARNING)
-logging.getLogger("kafka.client").setLevel(logging.WARNING)
-logging.getLogger("kafka.metrics").setLevel(logging.WARNING)
-
 logger = logging.getLogger(__name__)
-
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/output")
-
+UTPUT_DIR = os.environ.get("OUTPUT_DIR", "/output")
+KAFKA_IP = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
+KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
 INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
-SCRIPT_REFRESH_TIME = int(os.environ.get("INGEST_WAIT", "30"))
+SCRIPT_UPDATE_INTERVAL = int(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
+SCRIPT_EXECUTION_INTERVAL = float(os.environ.get("SCRIPT_RUN_INTERVAL", "10"))
+RUN_CHECK_INTERVAL = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
 LIVE_WS_NAME = os.environ.get("LIVE_WS", "lives")
 GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
 os.environ["EPICS_CA_ADDR_LIST"] = "130.246.39.152:5066"
 os.environ["EPICS_CA_AUTO_ADDR_LIST"] = "NO"
 
+kafka_config = {
+    "bootstrap_servers": f"{KAFKA_IP}:{KAFKA_PORT}",
+    "auto_offset_reset": "latest",
+    "enable_auto_commit": True,
+    "request_timeout_ms": 60000,
+    "session_timeout_ms": 60000,
+    "security_protocol": "PLAINTEXT",
+    "api_version_auto_timeout_ms": 60000,
+}
 
 # Local Dev only
 # config["defaultsave.directory"] = "~/Downloads"
 
 
-def initialize_instrument_workspace(run_start: RunStart) -> None:
-    """
-    Initialize the instrument workspace for a new run.
-
-    This function extracts the run name from the provided RunStart message, logs the
-    start of the new run, and loads an empty instrument workspace for the specified
-    instrument. The workspace is configured to handle event data.
-
-    :param run_start: The RunStart message containing information about the new run.
-    :return: None
-    """
-    run_name = run_start.RunName()
-    run_name = run_name.decode("utf-8")
-    logger.info(f"New run started: {run_name}")
-    # LoadEmptyInstrument(InstrumentName=INSTRUMENT, OutputWorkspace=LIVE_WS_NAME, MakeEventWorkspace=True)
-    LoadEmptyInstrument(
-        OutputWorkspace="lives",
-        Filename="/Users/sham/miniconda3/envs/mantid/instrument/MERLIN_Definition.xml",
-        MakeEventWorkspace=True,
-    )
-
-
-def process_events(events: EventMessage):
+def process_events(events: EventMessage,):
     """
     Process event data by adding events to the live workspace.
 
@@ -91,7 +68,6 @@ def process_events(events: EventMessage):
     detector_ids = events.DetectorIdAsNumpy()
     pulse_time = DateAndTime(events.PulseTime())
     ws = mtd[LIVE_WS_NAME]
-    detector_ids = ws.getIndicesFromDetectorIDs(detector_ids.tolist())
     if len(times_of_flight) > 0:
         for detector_id, tof in zip(detector_ids, times_of_flight, strict=False):
             spectra = ws.getSpectrum(int(detector_id))
@@ -114,8 +90,7 @@ def _shutdown(signum, frame):
     logger.info("Signal %s received, shutting down live data…", signum)
     sys.exit(0)
 
-
-def initialize_run(events_consumer: KafkaConsumer, runinfo_consumer: KafkaConsumer, run_start: RunStart | None = None) -> RunStart:
+def initialize_run(events_consumer, runinfo_consumer, run_start: RunStart | None = None) -> RunStart:
     """
     Initialize a run by finding the latest run start message, processing it, and seeking the event consumer.
 
@@ -129,15 +104,15 @@ def initialize_run(events_consumer: KafkaConsumer, runinfo_consumer: KafkaConsum
     :raises TopicIncompleteError: If no RunStart message is found in the runinfo topic.
     """
     logger.info("Initializing run: %s", str(run_start))
+
     if run_start is None:
         logger.info("Run Start is None")
-        run_start = find_latest_run_start(INSTRUMENT, runinfo_consumer)
+        run_start = find_latest_run_start(runinfo_consumer, INSTRUMENT)
         if run_start is None:
             raise TopicIncompleteError("No RunStart found in runInfo")
-    initialize_instrument_workspace(run_start)
+    initialize_instrument_workspace(INSTRUMENT,LIVE_WS_NAME,run_start)
     seek_event_consumer_to_runstart(INSTRUMENT, run_start, events_consumer)
     return run_start
-
 
 def start_live_reduction(
     script: str,
@@ -159,12 +134,15 @@ def start_live_reduction(
     :return: None
     """
     current_run_start = initialize_run(events_consumer, runinfo_consumer, run_start)
+    logger.info("Starting live data reduction loop")
 
-    current_run_lock = threading.Lock()
+    manager = multiprocessing.Manager()
+    shared_dict = manager.dict(current_run_start=current_run_start)
+    current_run_lock = multiprocessing.Lock()
 
     def get_current_run() -> RunStart:
         with current_run_lock:
-            return current_run_start
+            return shared_dict["current_run_start"]
 
     run_context = RunContext(get_current_run)
 
@@ -172,53 +150,64 @@ def start_live_reduction(
 
     misc_data_collector.on_run_start(run_context)
 
-    stop_event: threading.Event | None = None
-    misc_data_collector_thread = threading.Thread(
-        target=misc_data_collector.run_forever, args=(run_context, stop_event)
-    )
+    stop_event: multiprocessing.Event | None = None
+    collector_process: multiprocessing.Process | None = None
+
+
     if misc_data_collector.will_run_forever:
-        stop_event = threading.Event()
-        md_thread = threading.Thread(
+        stop_event = multiprocessing.Event()
+        collector_process = multiprocessing.Process(
             target=misc_data_collector.run_forever,
             args=(run_context, stop_event),
             name=f"{INSTRUMENT}-misc-collector",
             daemon=True,
         )
-        md_thread.start()
+        collector_process.start()
 
-    logger.info("Starting live data reduction loop")
-    loop_start_time = datetime.datetime.now()
+    script_last_checked_time = datetime.datetime.now()
+    script_last_executed_time = datetime.datetime.now()
+    run_last_checked_time = datetime.datetime.now()
     for message in events_consumer:
-        logger.info("Received event message")
+        # logger.info("Received event message" + str(message.value))
         events = EventMessage.GetRootAs(message.value, 0)
         process_events(events)
-        if (datetime.datetime.now() - loop_start_time).total_seconds() > SCRIPT_REFRESH_TIME:
+        if (datetime.datetime.now() - script_last_checked_time).total_seconds() > SCRIPT_UPDATE_INTERVAL:
             try:
                 new_script = get_script(INSTRUMENT)
                 if script != new_script:
-                    logger.info("New Script detected, restarting with new script")
+                    logger.info("New Script detected, Continuing with new script")
                     script = new_script
-                    start_live_reduction(script, events_consumer, runinfo_consumer, current_run_start)
             except RuntimeError as exc:
                 logger.warning("Could not get latest script, continuing with current script", exc_info=exc)
-        try:
-            exec(script)  # noqa: S102
-        except Exception as exc:
-            logger.warning("Error occurred in reduction, waiting 15 seconds and restarting loop", exc_info=exc)
-            time.sleep(15)
-            continue
-
+            script_last_checked_time = datetime.datetime.now()
+        if (datetime.datetime.now() - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
+            try:
+                misc_data_collector.on_pre_exec(run_context)
+                exec(script)
+            except Exception as exc:
+                logger.warning("Error occurred in reduction, waiting 15 seconds and continuing loop", exc_info=exc)
+                time.sleep(15)
+                continue
+            script_last_executed_time = datetime.datetime.now()
         # Check if we should move onto next workspace
-        latest_runstart = find_latest_run_start(INSTRUMENT, runinfo_consumer)
-        if latest_runstart != current_run_start:
-            with current_run_lock:
-                current_run_start = latest_runstart
+        if (
+            datetime.datetime.now() - run_last_checked_time
+        ).total_seconds() > RUN_CHECK_INTERVAL:
+            latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
+            if latest_runstart.RunName() != current_run_start.RunName():
+                logger.info("New run detected, restarting with new run")
 
-            if stop_event is not None:
-                stop_event.set()
-                misc_data_collector_thread.join(timeout=2)
-            start_live_reduction(script, events_consumer, runinfo_consumer, latest_runstart)
+                logger.info("Stopping current collector")
+                if stop_event is not None:
+                    stop_event.set()
+                    collector_process.join(timeout=2)
+                misc_data_collector.on_run_end(run_context)
 
+                with current_run_lock:
+                    current_run_start = latest_runstart
+
+                start_live_reduction(script, events_consumer, runinfo_consumer, latest_runstart)
+            run_last_checked_time = datetime.datetime.now()
 
 def main() -> None:
     """
@@ -230,15 +219,22 @@ def main() -> None:
 
     :return: None
     """
-
+    multiprocessing.set_start_method("fork")
     ##################
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
     # Setup consumers
-
-    events_consumer, runinfo_consumer = setup_consumers()
-
+    kafka_config = {
+        "bootstrap_servers": f"{KAFKA_IP}:{KAFKA_PORT}",
+        "auto_offset_reset": "latest",
+        "enable_auto_commit": True,
+        "request_timeout_ms": 60000,
+        "session_timeout_ms": 60000,
+        "security_protocol": "PLAINTEXT",
+        "api_version_auto_timeout_ms": 60000,
+    }
+    events_consumer, runinfo_consumer = setup_consumers(INSTRUMENT, kafka_config)
     script = get_script(INSTRUMENT)
     start_live_reduction(script, events_consumer, runinfo_consumer)
 
