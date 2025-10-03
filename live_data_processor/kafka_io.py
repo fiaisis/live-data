@@ -1,14 +1,12 @@
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from kafka import KafkaConsumer, TopicPartition
-from kafka.structs import OffsetAndTimestamp
 
 from live_data_processor.exceptions import TopicIncompleteError
 from schemas.compiled_schemas.RunStart import RunStart
-
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +14,9 @@ KAFKA_IP = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
 KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
 
 
-
 def datetime_from_record_timestamp(timestamp: int) -> str:
-    return datetime.fromtimestamp(timestamp/1000.).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.fromtimestamp(timestamp / 1000.0, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
+
 
 def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> RunStart | None:
     """
@@ -33,7 +31,6 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     """
     latest_start = None
 
-    # logger.info("Seeking to end of runinfo topic")
     # Set the offset to 3 messages from the end.
     tp = TopicPartition(f"{instrument}_runInfo", 0)
     end_offset = runinfo_consumer.end_offsets([tp])
@@ -43,7 +40,7 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     messages = []
     for index, message in enumerate(runinfo_consumer):
         messages.append(message.value)
-        if index == 2:
+        if index == 2:  # noqa: PLR2004 # Final index = 2 if 3 messages
             break
     if len(messages) < 1:
         raise TopicIncompleteError("Topic does not have any messages from which to read. %s", f"{instrument}_runInfo")
@@ -75,6 +72,6 @@ def setup_consumers(instrument: str, kafka_config: dict[str, Any]) -> tuple[Kafk
     Create the consumers for events and runinfo
     :return: A tuple of KafkaConsumer objects for events and runinfo.
     """
-    events_consumer = KafkaConsumer(f"{instrument}_events",  **kafka_config)
-    runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo",  **kafka_config)
+    events_consumer = KafkaConsumer(f"{instrument}_events", **kafka_config)
+    runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", **kafka_config)
     return events_consumer, runinfo_consumer

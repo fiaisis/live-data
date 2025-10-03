@@ -18,15 +18,15 @@ External dependencies used by implementations here:
 
 import datetime
 import logging
-import os
 import threading
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 
+from dateutil.tz import UTC
 from epics import caget
-from mantid.simpleapi import AddTimeSeriesLog
 
-from live_data_processor.runs import _create_run_identifier, RunContext
+from live_data_processor.runs import RunContext, _create_run_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,8 @@ class MerlinCollector(MiscDataCollector):
         :param stop_event: Event used to request termination of the loop.
         :return: None
         """
-        os.unlink("merlin-rot-log")
+        rot_log = Path("merlin-rot-log")
+        rot_log.unlink(missing_ok=True)
         next_tick = time.monotonic()
         while not stop_event.is_set():
             # 1st run check
@@ -144,8 +145,8 @@ class MerlinCollector(MiscDataCollector):
 
             # 2nd run check, this ensures time series log will only be added if the rotation is for the same run
             if rot is not None and _create_run_identifier(ctx.get_current_run()) == tick_id:
-                with open("merlin-rot-log", "a+") as fle:
-                    fle.write((datetime.datetime.now().isoformat() + "," + str(rot)) +"\n")
+                with rot_log.open("a+") as fle:
+                    fle.write((datetime.datetime.now(tz=UTC).isoformat() + "," + str(rot)) + "\n")
 
             next_tick += 1.0
             delay = next_tick - time.monotonic()
