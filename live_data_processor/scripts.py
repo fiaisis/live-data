@@ -10,7 +10,7 @@ def get_script(instrument: str) -> str:
     :returns: The content of the live data processing script as a string.
     """
     # logger.info("Getting latest sha")  # noqa: ERA001
-    # response = requests.get("https://api.github.com/repos/fiaisis/autoreduction-scripts/branches/main")  # noqa: ERA001
+    # response = requests.get("https://api.github.com/repos/fiaisis/autoreduction-scripts/branches/main")  # noqa: E501, ERA001
     # script_sha = response.json()["commit"]["sha"]  # noqa: ERA001
     # logger.info("Attempting to get latest %s script...", instrument)  # noqa: ERA001
     # response = requests.get(  # noqa: ERA001, RUF100
