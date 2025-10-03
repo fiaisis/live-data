@@ -1,3 +1,6 @@
+
+*/redpanda-quickstart/
+.idea
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -172,3 +175,19 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+/live_data_processor/insttemp.map
+/live_data_processor/compiled_schemas.zip
+/schemas/compiled_schemas.zip
+/live_data_processor/detector_id.txt
+/live_data_processor/DG_monovan.py
+/live_data_processor/DG_reduction.py
+/live_data_processor/DG_whitevan.py
+/flatc
+/foo.nxs
+/live_data_processor/mask_24_5.xml
+/live_data_processor/merlin-rot-log
+/output-lives.nxs
+/outputfoo-lives.nxs
+/live_data_processor/spectrum.txt
+/live_data_processor/reduction_utils.py
+/live_data_processor/script.py
