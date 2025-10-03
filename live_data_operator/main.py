@@ -36,7 +36,6 @@ from kubernetes.client import (  # type: ignore
     V1VolumeMount,
 )
 
-
 GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
 
 

@@ -1,7 +1,8 @@
-import pytest
 from unittest.mock import MagicMock, Mock
 
-from live_data_processor.runs import _create_run_identifier, RunContext
+import pytest
+
+from live_data_processor.runs import RunContext, _create_run_identifier
 
 
 @pytest.fixture

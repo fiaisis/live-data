@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 from schemas.compiled_schemas.RunStart import RunStart
 

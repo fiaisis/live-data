@@ -116,7 +116,7 @@ def initialize_run(events_consumer, runinfo_consumer, run_start: RunStart | None
     return run_start
 
 
-def start_live_reduction(  # noqa: C901
+def start_live_reduction(  # noqa: C901, PLR0915
     script: str,
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
