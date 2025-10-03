@@ -51,10 +51,10 @@ kafka_config = {
 }
 
 # Local Dev only
-# config["defaultsave.directory"] = "~/Downloads"
+# config["defaultsave.directory"] = "~/Downloads"  # noqa: ERA001
 
 
-def process_events(events: EventMessage,):
+def process_events(events: EventMessage):
     """
     Process event data by adding events to the live workspace.
 
@@ -90,6 +90,7 @@ def _shutdown(signum, frame):
     logger.info("Signal %s received, shutting down live data…", signum)
     sys.exit(0)
 
+
 def initialize_run(events_consumer, runinfo_consumer, run_start: RunStart | None = None) -> RunStart:
     """
     Initialize a run by finding the latest run start message, processing it, and seeking the event consumer.
@@ -110,11 +111,12 @@ def initialize_run(events_consumer, runinfo_consumer, run_start: RunStart | None
         run_start = find_latest_run_start(runinfo_consumer, INSTRUMENT)
         if run_start is None:
             raise TopicIncompleteError("No RunStart found in runInfo")
-    initialize_instrument_workspace(INSTRUMENT,LIVE_WS_NAME,run_start)
+    initialize_instrument_workspace(INSTRUMENT, LIVE_WS_NAME, run_start)
     seek_event_consumer_to_runstart(INSTRUMENT, run_start, events_consumer)
     return run_start
 
-def start_live_reduction(
+
+def start_live_reduction(  # noqa: C901
     script: str,
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
@@ -153,7 +155,6 @@ def start_live_reduction(
     stop_event: multiprocessing.Event | None = None
     collector_process: multiprocessing.Process | None = None
 
-
     if misc_data_collector.will_run_forever:
         stop_event = multiprocessing.Event()
         collector_process = multiprocessing.Process(
@@ -164,14 +165,13 @@ def start_live_reduction(
         )
         collector_process.start()
 
-    script_last_checked_time = datetime.datetime.now()
-    script_last_executed_time = datetime.datetime.now()
-    run_last_checked_time = datetime.datetime.now()
+    script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
+    script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
+    run_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
     for message in events_consumer:
-        # logger.info("Received event message" + str(message.value))
         events = EventMessage.GetRootAs(message.value, 0)
         process_events(events)
-        if (datetime.datetime.now() - script_last_checked_time).total_seconds() > SCRIPT_UPDATE_INTERVAL:
+        if (datetime.datetime.now(tz=datetime.UTC) - script_last_checked_time).total_seconds() > SCRIPT_UPDATE_INTERVAL:
             try:
                 new_script = get_script(INSTRUMENT)
                 if script != new_script:
@@ -179,20 +179,20 @@ def start_live_reduction(
                     script = new_script
             except RuntimeError as exc:
                 logger.warning("Could not get latest script, continuing with current script", exc_info=exc)
-            script_last_checked_time = datetime.datetime.now()
-        if (datetime.datetime.now() - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
+            script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
+        if (
+            datetime.datetime.now(tz=datetime.UTC) - script_last_executed_time
+        ).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
             try:
                 misc_data_collector.on_pre_exec(run_context)
-                exec(script)
+                exec(script)  # noqa: S102
             except Exception as exc:
                 logger.warning("Error occurred in reduction, waiting 15 seconds and continuing loop", exc_info=exc)
                 time.sleep(15)
                 continue
-            script_last_executed_time = datetime.datetime.now()
+            script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
         # Check if we should move onto next workspace
-        if (
-            datetime.datetime.now() - run_last_checked_time
-        ).total_seconds() > RUN_CHECK_INTERVAL:
+        if (datetime.datetime.now(tz=datetime.UTC) - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
             latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
             if latest_runstart.RunName() != current_run_start.RunName():
                 logger.info("New run detected, restarting with new run")
@@ -207,7 +207,8 @@ def start_live_reduction(
                     current_run_start = latest_runstart
 
                 start_live_reduction(script, events_consumer, runinfo_consumer, latest_runstart)
-            run_last_checked_time = datetime.datetime.now()
+            run_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
+
 
 def main() -> None:
     """
