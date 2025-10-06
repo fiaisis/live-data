@@ -19,7 +19,11 @@ def initialize_instrument_workspace(instrument: str, workspace_name: str, run_st
     :return: None
     """
     LoadEmptyInstrument(InstrumentName=instrument, OutputWorkspace=workspace_name, MakeEventWorkspace=True)
-
+    # LoadEmptyInstrument(
+    #     OutputWorkspace="lives",
+    #     Filename="/Users/sham/miniconda3/envs/mantid/instrument/MERLIN_Definition.xml",
+    #     MakeEventWorkspace=True,
+    # )
     detector_ids = run_start.DetectorSpectrumMap().DetectorIdAsNumpy()
     spectrum = run_start.DetectorSpectrumMap().SpectrumAsNumpy()
     ws = mtd[workspace_name]
@@ -32,4 +36,4 @@ def initialize_instrument_workspace(instrument: str, workspace_name: str, run_st
     mapfile = Path("insttemp.map")
     with mapfile.open("w") as f:
         f.write(outstr)
-    GroupDetectors(ws, mapfile, OutputWorkspace=workspace_name)
+    GroupDetectors(ws, str(mapfile), OutputWorkspace=workspace_name)
