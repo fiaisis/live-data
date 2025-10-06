@@ -21,4 +21,4 @@ def get_script(instrument: str) -> str:
     #     raise RuntimeError("Failed to obtain script from remote, recieved status code: %s", response.status_code)  # noqa: E501, ERA001
     # logger.info("Successfully obtained %s script", instrument)  # noqa: ERA001
     # return response.text  # noqa: ERA001
-    return """from mantid.simpleapi import *; SaveNexusProcessed(Filename="~/work/live-data/output-lives.nxs", InputWorkspace="lives")"""  # noqa: E501
+    return """from mantid.simpleapi import *; SaveNexusProcessed(Filename="/output/output-lives.nxs", InputWorkspace="lives")"""  # noqa: E501
