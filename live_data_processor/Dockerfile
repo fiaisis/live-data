@@ -11,11 +11,7 @@ COPY ./schemas live_data_processor/schemas/
 
 WORKDIR /app/live_data_processor
 
-RUN ls .
-RUN ls ..
-RUN ls /app
-RUN ls /app/live_data_processor
-
+ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 WORKDIR /app/live_data_processor
 ENTRYPOINT ["python", "main.py"]
