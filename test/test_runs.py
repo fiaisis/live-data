@@ -5,7 +5,7 @@ import pytest
 from live_data_processor.runs import RunContext, _create_run_identifier
 
 
-@pytest.fixture
+@pytest.fixture()
 def mock_runstart():
     mock = Mock()
     mock.StartTime.return_value = 1234567890
