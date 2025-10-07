@@ -185,7 +185,9 @@ def start_live_reduction(  # noqa: C901, PLR0915
         ).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
             try:
                 misc_data_collector.on_pre_exec(run_context)
+                logger.info("Executing reduction script")
                 exec(script)  # noqa: S102
+                logger.info("Reduction script executed")
             except Exception as exc:
                 logger.warning("Error occurred in reduction, waiting 15 seconds and continuing loop", exc_info=exc)
                 time.sleep(15)
