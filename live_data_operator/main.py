@@ -69,6 +69,7 @@ PROCESSOR_IMAGE = os.environ.get("LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb
 CEPH_CREDS_SECRET_NAMESPACE = os.environ.get("CEPH_CREDS_SECRET_NAMESPACE", "fia")
 CLUSTER_ID = os.environ.get("CLUSTER_ID", "ba68226a-672f-4ba5-97bc-22840318b2ec")
 FS_NAME = os.environ.get("FS_NAME", "deneb")
+FIA_API_URL = os.environ.get("FIA_API_URL", "http://localhost:8000")
 
 
 def skip_conflict(func):
@@ -254,7 +255,11 @@ def setup_deployment(
             V1VolumeMount(name="ceph-mount", mount_path="/output"),
             V1VolumeMount(name="archive-mount", mount_path="/archive"),
         ],
-        env=[V1EnvVar(name="INSTRUMENT", value=instrument), V1EnvVar(name="GITHUB_API_TOKEN", value=GITHUB_API_TOKEN)],
+        env=[
+            V1EnvVar(name="INSTRUMENT", value=instrument),
+            V1EnvVar(name="GITHUB_API_TOKEN", value=GITHUB_API_TOKEN),
+            V1EnvVar(name="FIA_API_URL", value=FIA_API_URL),
+        ],
     )
     pod_spec = V1PodSpec(
         containers=[container],
