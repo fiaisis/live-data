@@ -25,6 +25,7 @@ from pathlib import Path
 
 from dateutil.tz import UTC
 from epics import caget
+from mantid.simpleapi import AddTimeSeriesLog
 
 from live_data_processor.runs import RunContext, _create_run_identifier
 
@@ -114,6 +115,13 @@ class MerlinCollector(MiscDataCollector):
     def will_run_forever(self):
         """This collector runs continuously on a background thread."""
         return True
+
+    def on_pre_exec(self, ctx: RunContext) -> None:
+        with Path("merlin-rot-log").open("r") as fle:
+            for line in fle.readlines():
+                timestamp = line.split(",")[0]
+                value = line.split(",")[1]
+                AddTimeSeriesLog("lives", "Rot", timestamp, value)
 
     def run_forever(self, ctx: RunContext, stop_event: threading.Event) -> None:
         """
