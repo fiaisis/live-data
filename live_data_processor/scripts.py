@@ -16,9 +16,5 @@ def get_script(instrument: str) -> str | None:
 
     logger.info("Getting latest script")
     response = requests.get(f"{FIA_API_URL}/live-data/{instrument.lower()}/script")
-    print(response)
     return response.text if response.status_code == 200 else None
     # return """from mantid.simpleapi import *; SaveNexusProcessed(Filename="/output/output-lives.nxs", InputWorkspace="lives")"""  # noqa: E501
-
-
-print(get_script("MERLIN"))
