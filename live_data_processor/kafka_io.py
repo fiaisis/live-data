@@ -60,6 +60,7 @@ def seek_event_consumer_to_runstart(instrument: str, run_start: RunStart, events
     """
     logger.info("Seeking event consumer to run start")
     run_start_ms = run_start.StartTime()
+    timestamp = datetime_from_record_timestamp(run_start_ms)
 
     # Find the offset for a given time and seek to it
     topic_partition = TopicPartition(f"{instrument}_events", 0)

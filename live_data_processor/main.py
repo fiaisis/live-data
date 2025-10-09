@@ -186,7 +186,10 @@ def start_live_reduction(  # noqa: C901, PLR0915
             try:
                 misc_data_collector.on_pre_exec(run_context)
                 logger.info("Executing reduction script")
-                exec(script)  # noqa: S102
+                import reduction_script
+
+                reduction_script.execute()
+                # exec(script)
                 logger.info("Reduction script executed")
             except Exception as exc:
                 logger.warning("Error occurred in reduction, waiting 15 seconds and continuing loop", exc_info=exc)
@@ -239,6 +242,10 @@ def main() -> None:
     }
     events_consumer, runinfo_consumer = setup_consumers(INSTRUMENT, kafka_config)
     script = get_script(INSTRUMENT)
+    print(script)
+    with open("reduction_script.py", "w") as fle:
+        fle.write(script)
+
     start_live_reduction(script, events_consumer, runinfo_consumer)
 
 
