@@ -72,6 +72,48 @@ FS_NAME = os.environ.get("FS_NAME", "deneb")
 FIA_API_URL = os.environ.get("FIA_API_URL", "http://localhost:8000")
 
 
+def get_processor_image_sha() -> str:
+    """
+    Get the processor image sha from the environment variable.
+    We use a function so that if the image update changes, a reload is guaranteed
+    """
+    return os.environ.get("LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb84cac95e094cdd245df6ca3bfb6")
+
+
+def processor_image_ref(sha: str) -> str:
+    """
+    Given a sha, return the image reference
+
+    :param sha: The sha of the image
+    :return: The image reference
+    """
+    return f"ghcr.io/fiaisis/live-data-processor@sha256:{sha}"
+
+
+def rollout_processor(instrument: str, namespace: str) -> None:
+    sha = get_processor_image_sha()
+
+    container = V1Container(
+        name=f"livedataprocessor-{instrument}",
+        image=processor_image_ref(sha),
+    )
+
+    tmpl_meta = V1ObjectMeta(
+        labels={"processor-image-sha": sha},
+    )
+    pod_spec = V1PodSpec(containers=[container])
+    template = V1PodTemplateSpec(metadata=tmpl_meta, spec=pod_spec)
+    spec = V1DeploymentSpec(template=template)
+
+    patch = V1Deployment(spec=spec)
+
+    AppsV1Api().patch_namespaced_deployment(
+        name=f"livedataprocessor-{instrument}-deployment",
+        namespace=namespace,
+        body=patch,
+    )
+
+
 def skip_conflict(func):
     """
     Decorator to skip the creation of a resource that already exists
@@ -364,3 +406,4 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
     instrument = body["metadata"]["name"]
     logger.info(f"Operator resumed, redeploying {instrument} LiveDataProcessor")
+    rollout_processor(instrument, CEPH_CREDS_SECRET_NAMESPACE)
