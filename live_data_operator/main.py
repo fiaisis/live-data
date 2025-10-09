@@ -62,6 +62,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("LiveDataOperator")
 logging.getLogger("aiohttp.access").addFilter(EndpointFilter())
+logging.getLogger("kopf").setLevel(logging.INFO)
+logging.getLogger("kopf.objects").setLevel(logging.INFO)
+logging.getLogger("kopf._cogs.clients.w").setLevel(logging.INFO)
+logging.getLogger("kubernetes").setLevel(logging.INFO)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 
 DEV_MODE = os.environ.get("DEV_MODE", "true").lower() == "true"
 
