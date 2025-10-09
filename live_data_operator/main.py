@@ -5,7 +5,7 @@ Main Module
 import logging
 import os
 import sys
-from datetime import UTC, datetime
+import time
 from functools import wraps
 from http import HTTPStatus
 from typing import Any
@@ -18,6 +18,7 @@ from kubernetes.client import (  # type: ignore
     CoreV1Api,
     V1Container,
     V1CSIPersistentVolumeSource,
+    V1DeleteOptions,
     V1Deployment,
     V1DeploymentSpec,
     V1EnvVar,
@@ -91,35 +92,63 @@ def processor_image_ref(sha: str) -> str:
     return f"ghcr.io/fiaisis/live-data-processor@sha256:{sha}"
 
 
-def rollout_processor(instrument: str, namespace: str) -> None:
-    sha = get_processor_image_sha()
-    ts = datetime.now(UTC).isoformat()
+def recreate_processor_deployment(instrument: str, namespace: str) -> None:
+    """
+    Deletes the processor Deployment if it exists, waits for deletion to complete,
+    then recreates it using the current image SHA and spec from setup_deployment().
 
-    patch = {
-        "spec": {
-            "template": {
-                "metadata": {
-                    "labels": {"processor-image-sha": sha},
-                    "annotations": {"fia/rollout-at": ts},
-                },
-                "spec": {
-                    "containers": [
-                        {
-                            "name": f"livedataprocessor-{instrument}",
-                            "image": processor_image_ref(sha),
-                        }
-                    ]
-                },
-            }
-        }
-    }
+    :param instrument: The instrument for which the deployment is being recreated
+    :param namespace: The namespace in which the deployment is being recreated
 
-    AppsV1Api().patch_namespaced_deployment(
-        name=f"livedataprocessor-{instrument}-deployment",
+    :return: None
+    """
+    api = AppsV1Api()
+    name = f"livedataprocessor-{instrument}-deployment"
+
+    # --- delete if exists ---
+    try:
+        logger.info("Deleting Deployment %s/%s (if it exists)...", namespace, name)
+        api.delete_namespaced_deployment(
+            name=name,
+            namespace=namespace,
+            body=V1DeleteOptions(
+                propagation_policy="Foreground",
+                grace_period_seconds=30,
+            ),
+        )
+    except ApiException as exc:
+        if exc.status == HTTPStatus.NOT_FOUND:
+            logger.info("Deployment %s/%s not found; will create fresh.", namespace, name)
+        else:
+            raise
+
+    # wait until it's really gone
+    start = time.time()
+    delete_timeout = 60
+    while True:
+        try:
+            api.read_namespaced_deployment(name=name, namespace=namespace)
+            if time.time() - start > delete_timeout:
+                raise TimeoutError(f"Timed out waiting for deletion of {namespace}/{name}")
+            time.sleep(1)
+        except ApiException as exc:
+            if exc.status == HTTPStatus.NOT_FOUND:
+                break
+            raise
+
+    body = setup_deployment(
+        ceph_creds_k8s_secret_name=CEPH_CREDS_SECRET_NAME,
+        cluster_id=CLUSTER_ID,
+        instrument=instrument,
         namespace=namespace,
-        body=patch,
-        _content_type="application/strategic-merge-patch+json",  # important
+        fs_name=FS_NAME,
     )
+
+    body = ApiClient().sanitize_for_serialization(body)
+    kopf.adopt(body)
+
+    logger.info("Creating Deployment %s/%s with current image SHA...", namespace, name)
+    AppsV1Api().create_namespaced_deployment(namespace=namespace, body=body)
 
 
 def skip_conflict(func):
@@ -414,4 +443,4 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
     instrument = body["metadata"]["name"]
     logger.info(f"Operator resumed, redeploying {instrument} LiveDataProcessor")
-    rollout_processor(instrument, CEPH_CREDS_SECRET_NAMESPACE)
+    recreate_processor_deployment(instrument, CEPH_CREDS_SECRET_NAMESPACE)
