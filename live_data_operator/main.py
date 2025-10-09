@@ -5,6 +5,7 @@ Main Module
 import logging
 import os
 import sys
+from datetime import UTC, datetime
 from functools import wraps
 from http import HTTPStatus
 from typing import Any
@@ -92,20 +93,27 @@ def processor_image_ref(sha: str) -> str:
 
 def rollout_processor(instrument: str, namespace: str) -> None:
     sha = get_processor_image_sha()
+    ts = datetime.now(UTC).isoformat()
 
-    container = V1Container(
-        name=f"livedataprocessor-{instrument}",
-        image=processor_image_ref(sha),
+    patch = V1Patch(
+        {  # noqa: F821
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "labels": {"processor-image-sha": sha},
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": f"livedataprocessor-{instrument}",
+                                "image": processor_image_ref(sha),
+                            }
+                        ]
+                    },
+                }
+            }
+        }
     )
-
-    tmpl_meta = V1ObjectMeta(
-        labels={"processor-image-sha": sha},
-    )
-    pod_spec = V1PodSpec(containers=[container])
-    template = V1PodTemplateSpec(metadata=tmpl_meta, spec=pod_spec)
-    spec = V1DeploymentSpec(template=template)
-
-    patch = V1Deployment(spec=spec)
 
     AppsV1Api().patch_namespaced_deployment(
         name=f"livedataprocessor-{instrument}-deployment",
