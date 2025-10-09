@@ -95,30 +95,30 @@ def rollout_processor(instrument: str, namespace: str) -> None:
     sha = get_processor_image_sha()
     ts = datetime.now(UTC).isoformat()
 
-    patch = V1Patch(
-        {  # noqa: F821
-            "spec": {
-                "template": {
-                    "metadata": {
-                        "labels": {"processor-image-sha": sha},
-                    },
-                    "spec": {
-                        "containers": [
-                            {
-                                "name": f"livedataprocessor-{instrument}",
-                                "image": processor_image_ref(sha),
-                            }
-                        ]
-                    },
-                }
+    patch = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "labels": {"processor-image-sha": sha},
+                    "annotations": {"fia/rollout-at": ts},
+                },
+                "spec": {
+                    "containers": [
+                        {
+                            "name": f"livedataprocessor-{instrument}",
+                            "image": processor_image_ref(sha),
+                        }
+                    ]
+                },
             }
         }
-    )
+    }
 
     AppsV1Api().patch_namespaced_deployment(
         name=f"livedataprocessor-{instrument}-deployment",
         namespace=namespace,
         body=patch,
+        _content_type="application/strategic-merge-patch+json",  # important
     )
 
 
