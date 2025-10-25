@@ -3,8 +3,7 @@ from pathlib import Path
 import numpy as np
 from mantid.api import mtd
 from mantid.simpleapi import GroupDetectors, LoadEmptyInstrument
-
-from schemas.compiled_schemas.RunStart import RunStart
+from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 
 
 def initialize_instrument_workspace(instrument: str, workspace_name: str, run_start: RunStart) -> None:
@@ -27,6 +26,7 @@ def initialize_instrument_workspace(instrument: str, workspace_name: str, run_st
     detector_ids = run_start.DetectorSpectrumMap().DetectorIdAsNumpy()
     spectrum = run_start.DetectorSpectrumMap().SpectrumAsNumpy()
     ws = mtd[workspace_name]
+    ws.getAxis(0).setUnit("TOF")
     detector_ids = np.array(ws.getIndicesFromDetectorIDs(detector_ids.tolist()))
     complete_spectrum = np.array(ws.getSpectrumNumbers())
     ids = [complete_spectrum[detector_ids[np.where(spectrum == sp)[0]]] for sp in np.unique(spectrum)]

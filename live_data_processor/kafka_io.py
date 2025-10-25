@@ -1,12 +1,14 @@
 import logging
 import os
+import sys
 from datetime import UTC, datetime
 from typing import Any
 
 from kafka import KafkaConsumer, TopicPartition
+from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
+from streaming_data_types.fbschemas.run_stop_6s4t.RunStop import RunStop
 
 from live_data_processor.exceptions import TopicIncompleteError
-from schemas.compiled_schemas.RunStart import RunStart
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +36,30 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     # Set the offset to 3 messages from the end.
     tp = TopicPartition(f"{instrument}_runInfo", 0)
     end_offset = runinfo_consumer.end_offsets([tp])
-    runinfo_consumer.seek(tp, end_offset[tp] - 3)
+    runinfo_consumer.seek(tp, end_offset[tp] - 10)
 
     # Grab the last 3 messages, reverse their order, then find the latest runstart by iterating through.
+    # safe list comprehension as consumer will timeout after 1 second
     messages = []
     for index, message in enumerate(runinfo_consumer):
         messages.append(message.value)
-        if index == 2:  # noqa: PLR2004 # Final index = 2 if 3 messages
+        if index == 3:  # Final index = 2 if 3 messages
             break
+    # messages = [message.value for message in runinfo_consumer]
     if len(messages) < 1:
         raise TopicIncompleteError("Topic does not have any messages from which to read. %s", f"{instrument}_runInfo")
     for message in reversed(messages):
         if RunStart.RunStartBufferHasIdentifier(message, 0):
-            latest_start = RunStart.GetRootAs(message, 0)
+            latest_start = RunStart.GetRootAsRunStart(message, 0)
             break
+    else:
+        messages = [
+            f"Run Stop at {datetime_from_record_timestamp(RunStop.GetRootAsRunStop(message, 0).StopTime())}"
+            if RunStop.RunStopBufferHasIdentifier(message, 0)
+            else "Unknown message (Not run start or run stop)"
+            for message in messages
+        ]
+        logger.warning("No run start found in runinfo topic. Messages: %s", messages)
     return latest_start
 
 
@@ -58,14 +70,23 @@ def seek_event_consumer_to_runstart(instrument: str, run_start: RunStart, events
     :param events_consumer: The event consumer to seek to the run start message in.
     :return: None
     """
-    logger.info("Seeking event consumer to run start")
+
     run_start_ms = run_start.StartTime()
     timestamp = datetime_from_record_timestamp(run_start_ms)
+    logger.info("Seeking event consumer to run start: %s", timestamp)
 
     # Find the offset for a given time and seek to it
-    topic_partition = TopicPartition(f"{instrument}_events", 0)
-    offset_info = events_consumer.offsets_for_times({topic_partition: run_start_ms})[topic_partition]
-    events_consumer.seek(topic_partition, offset_info.offset)
+    for topic in [f"{instrument}_events", f"{instrument}_sampleEnv"]:
+        tp = TopicPartition(topic, 0)
+        offset_info = events_consumer.offsets_for_times({tp: run_start_ms})[tp]
+        if offset_info is None or offset_info.offset is None:
+            logger.warning(
+                "There are no events at the offset time for %s. Is the instrument waiting? See: "
+                "https://isiscomputinggroup.github.io/WebDashboard/instruments",
+                topic,
+            )
+            sys.exit(0)
+        events_consumer.seek(tp, offset_info.offset)
 
 
 def setup_consumers(instrument: str, kafka_config: dict[str, Any]) -> tuple[KafkaConsumer, KafkaConsumer]:
@@ -73,6 +94,7 @@ def setup_consumers(instrument: str, kafka_config: dict[str, Any]) -> tuple[Kafk
     Create the consumers for events and runinfo
     :return: A tuple of KafkaConsumer objects for events and runinfo.
     """
-    events_consumer = KafkaConsumer(f"{instrument}_events", **kafka_config)
-    runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", **kafka_config)
+    events_consumer = KafkaConsumer(**kafka_config)
+    runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", consumer_timeout_ms=1000, **kafka_config)
+    events_consumer.subscribe([f"{instrument}_events", f"{instrument}_sampleEnv"])
     return events_consumer, runinfo_consumer

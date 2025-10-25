@@ -2,7 +2,7 @@ FROM ghcr.io/fiaisis/mantid:6.13.1
 
 RUN pip install kafka-python==2.2.15
 RUN pip install pyepics
-RUN pip install flatbuffers==25.2.10
+RUN pip install ess-streaming-data-types==0.27.0
 
 WORKDIR /app
 

@@ -118,10 +118,13 @@ class MerlinCollector(MiscDataCollector):
 
     def on_pre_exec(self, ctx: RunContext) -> None:
         with Path("merlin-rot-log").open("r") as fle:
-            for line in fle.readlines():
+            count = 0
+            for index, line in enumerate(fle.readlines()):
                 timestamp = line.split(",")[0]
                 value = line.split(",")[1]
                 AddTimeSeriesLog("lives", "Rot", timestamp, value)
+                count = index
+            logger.info("Added %d time series logs", count)
 
     def run_forever(self, ctx: RunContext, stop_event: threading.Event) -> None:
         """
