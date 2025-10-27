@@ -1,6 +1,5 @@
 [project]
 name = "live-data-processor"
-readme = "README.md"
 version = "0.0.1"
 requires-python = ">= 3.11"
 dependencies = [
@@ -38,7 +37,6 @@ all = [
 
 
 [tool.setuptools]
-packages = ["live_data_processor"]
 
 [tool.ruff]
 line-length = 120
