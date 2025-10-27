@@ -166,7 +166,7 @@ def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
     """
 
     @wraps(func)
-    def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> Any: 
+    def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> Any:
         try:
             logger.info("Inside decorator")
             return func(*args, **kwargs)
