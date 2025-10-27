@@ -1,0 +1,92 @@
+[project]
+name = "live-data-processor"
+readme = "README.md"
+version = "0.0.1"
+requires-python = ">= 3.11"
+dependencies = [
+    "kafka-python==2.2.15",
+    "pyepics",
+    "ess-streaming-data-types==0.27.0"
+]
+
+[project.urls]
+"Repository" = "https://github.com/fiaisis/live-data"
+
+[project.optional-dependencies]
+formatting = [
+    "ruff==0.5.4",
+    "mypy==1.11.0",
+    "live-data[test]",
+    "types-requests==2.32.0.20240712",
+    "types-urllib3==1.26.25.14",
+    "types-aiofiles==24.1.0.20240626",
+]
+
+test = [
+    "pytest==8.3.1",
+    "pytest-cov==6.0.0",
+    "pytest-random-order==1.1.1",
+    "pytest-env==1.1.3",
+]
+
+all = [
+    "live-data[test]",
+    "live-data[formatting]"
+]
+
+
+
+[tool.setuptools]
+packages = ["live_data_processor"]
+
+[tool.ruff]
+line-length = 120
+exclude = ["schemas"]
+
+[tool.ruff.lint]
+select = [
+    "F", # flake8 - Basic initial rules
+    "E", # pycodestyle (Error) - pep8 compliance
+    "W", # pycodestyle (Warning) - pep8 compliance
+    "C90", # mccabe - flags extremely complex functions
+    "I", # isort - Sort imports and flag missing imports
+    "N", # pep8-naming - Ensures pep8 compliance for naming
+    "UP", # pyupgrade - Automatically upgrade syntax for newer versions
+    "S", # flake8-bandit - Flake8 security
+    "B", # flake8-bugbear - Finding likely bugs and design problems
+    "A", # flake8-builtins - Finds code shadowing builtins
+    "COM", # flake8-commas - Find and fixes issues with commas in lists/dicts
+    "C4", # flake8-comprehensions - Simplify list/dict comprehension
+    "DTZ", # flake8-datetimez - Ensure timezones are enforced for code
+    "EXE", # flake8-executable - Fix issues around shebangs and executable files
+    "ISC", # flake8-implicit-str-concat - Find implicitly concatenated strings
+    "LOG", # flake8-logging - Enforce basic rules with builtin logger
+    "T20", # flake8-print - Remove print statements
+    "PT", # flake8-pytest-style - Fix issues with pytest
+    "Q", # flake8-quotes - Bad quote handling
+    "RET", # flake8-return - Fix issues with return values
+    "SIM", # flake8-simplify - Simplify parts of the code
+    "TCH", # flake8-type-checking - Move imports only for typing behind TYPE_CHECKING
+    "PTH", # flake8-use-pathlib - Replace os with pathlib
+    "TD", # flake8-todos - Enforce basic TODOs
+    "FIX", # flake8-fix me - Resolve the issue instead of a fix me
+    "ERA", # eradicate - Remove commented out code.
+    "PL", "C", "E", "R", "W", # Pylint - does a lot
+    "FLY", # flynt - prefer f string over .format
+    "PERF", # Perflint - Flag performance antipatterns
+    "RUF", # Ruff specific rules
+]
+ignore = [
+    "S101", # flake8-bandit - Use of assert (all over pytest tests)
+    "ISC001", # Conflicts with the formatter
+    "COM812", # Conflicts with the formatter
+    "TCH003", # Conflicts with pydantic
+    "TCH002", # Conflicts with pydantic
+    "TCH001", # Conflicts with pydantic
+]
+
+[tool.ruff.lint.pylint]
+max-args = 10
+
+[tool.pytest.ini_options]
+required_plugins = "pytest-env"
