@@ -1,0 +1,93 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main
+
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.WRITE_PACKAGE_TOKEN }}
+
+      - name: Checkout the Gitops repository
+        uses: actions/checkout@v4
+        with:
+          repository: fiaisis/gitops
+          token: ${{ secrets.GITOPS_STAGING_EDIT_TOKEN }}
+
+      - name: Build and push live-data-operator Docker image
+        id: live_data_operator_build
+        uses: docker/build-push-action@v5
+        with:
+          file: ./container/operator.Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/live-data-operator:${{ github.sha }}
+
+      - name: Remove sha256 from the builds digest
+        id: remove_sha256_operator
+        run: |
+          DIGEST=${{ steps.live_data_operator_build.outputs.digest }}
+          FILTERED_DIGEST=${DIGEST#sha256:}
+          echo "::set-output name=digest::$FILTERED_DIGEST"
+
+      - name: Edit the YAML live-data-operator.yml file for staging for live data operator
+        uses: mikefarah/yq@v4.44.1
+        with:
+          cmd: yq e -i '.spec.template.spec.containers[] |= select(.name == "live-data-operator").image = "ghcr.io/fiaisis/live-data-operator@${{ steps.live_data_operator_build.outputs.digest }}"' './components/live-data-operator/envs/staging/live-data-operator.yml'
+
+      - name: Commit and push changes for live data operator
+        continue-on-error: true
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git commit -am "[CD] Update live-data/operator with this commit ${{ github.event.head_commit.url}}"
+          git push
+
+      - name: Build and push live-data-processor Docker image
+        id: live_data_processor_build
+        uses: docker/build-push-action@v5
+        with:
+          file: ./container/processor.Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/live-data-processor:${{ github.sha }}
+
+      - name: Remove sha256 from the processor build’s digest
+        id: remove_sha256_processor
+        run: |
+          DIGEST=${{ steps.live_data_processor_build.outputs.digest }}
+          FILTERED_DIGEST=${DIGEST#sha256:}
+          echo "::set-output name=digest::$FILTERED_DIGEST"
+
+
+      - name: Update LIVE_DATA_PROCESSOR_IMAGE in the Deployment YAML
+        uses: mikefarah/yq@v4.44.1
+        with:
+          cmd: yq e -i '.spec.template.spec.containers[] |= (select(.name == "live-data-operator") | .env[] |= select(.name == "LIVE_DATA_PROCESSOR_IMAGE_SHA").value = "${{ steps.remove_sha256_processor.outputs.digest }}")' './components/live-data-operator/envs/staging/live-data-operator.yml'
+
+
+      - name: Commit and push changes for live data operator
+        continue-on-error: true
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git commit -am "[CD] Update live-data/operator & processor with this commit ${{ github.event.head_commit.url}}"
+          git push
