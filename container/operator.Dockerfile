@@ -2,7 +2,7 @@ FROM python:3.13-slim
 
 WORKDIR /live-data
 
-COPY . .
+COPY ./live_data_operator .
 
 RUN pip install .
 
