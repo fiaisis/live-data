@@ -4,6 +4,9 @@ import logging
 import os
 import signal
 import sys
+from collections.abc import Callable
+from types import FrameType
+from typing import Any
 
 from kafka import KafkaConsumer
 from mantid import ConfigService
@@ -31,22 +34,22 @@ logging.basicConfig(
     format="[%(asctime)s]-%(name)s-%(levelname)s: %(message)s",
     level=logging.INFO,
 )
-ConfigService.setLogLevel(3)
+ConfigService.setLogLevel(3) 
 logger = logging.getLogger(__name__)
-UTPUT_DIR = os.environ.get("OUTPUT_DIR", "/output")
-KAFKA_IP = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
-KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
+UTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "/output")
+KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
+KAFKA_PORT: int = int(os.environ.get("KAFKA_PORT", "31092"))
 INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
-SCRIPT_UPDATE_INTERVAL = int(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
-SCRIPT_EXECUTION_INTERVAL = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(60 * 5)))
-RUN_CHECK_INTERVAL = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
-LIVE_WS_NAME = os.environ.get("LIVE_WS", "lives")
-GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
+SCRIPT_UPDATE_INTERVAL: int = int(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
+SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(60 * 5)))
+RUN_CHECK_INTERVAL: float = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
+LIVE_WS_NAME: str = os.environ.get("LIVE_WS", "lives")
+GITHUB_API_TOKEN: str = os.environ.get("GITHUB_API_TOKEN", "shh")
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
 os.environ["EPICS_CA_ADDR_LIST"] = "130.246.39.152:5066"
 os.environ["EPICS_CA_AUTO_ADDR_LIST"] = "NO"
 
-kafka_config = {
+kafka_config: dict[str, object] = {
     "bootstrap_servers": f"{KAFKA_IP}:{KAFKA_PORT}",
     "auto_offset_reset": "latest",
     "enable_auto_commit": True,
@@ -56,11 +59,9 @@ kafka_config = {
     "api_version_auto_timeout_ms": 60000,
 }
 
-# Local Dev only
-# config["defaultsave.directory"] = "~/Downloads"  # noqa: ERA001
 
 
-def process_events(events: EventMessage):
+def process_events(events: EventMessage) -> None:
     """
     Process event data by adding events to the live workspace.
 
@@ -80,7 +81,7 @@ def process_events(events: EventMessage):
             spectra.addEventQuickly(tof / 1000.0, pulse_time)
 
 
-def _shutdown(signum, frame):
+def _shutdown(signum: int, frame: FrameType | None) -> None:
     """
     Handle system signals for clean termination of live data processing.
 
@@ -97,7 +98,11 @@ def _shutdown(signum, frame):
     sys.exit(0)
 
 
-def initialize_run(events_consumer, runinfo_consumer, run_start: RunStart | None = None) -> RunStart:
+def initialize_run(
+    events_consumer: KafkaConsumer,
+    runinfo_consumer: KafkaConsumer,
+    run_start: RunStart | None = None,
+) -> RunStart:
     """
     Initialize a run by finding the latest run start message, processing it, and seeking the event consumer.
 
@@ -122,7 +127,7 @@ def initialize_run(events_consumer, runinfo_consumer, run_start: RunStart | None
     return run_start
 
 
-def process_message(message) -> None:
+def process_message(message: Any) -> None:
     schema = get_schema(message.value)
     if schema == "ev42":
         events = EventMessage.GetRootAsEventMessage(message.value, 0)
@@ -160,7 +165,7 @@ def start_live_reduction(
     logger.info("Run began at %s", datetime_from_record_timestamp(current_run_start.StartTime()))
     logger.info("Starting live data reduction loop")
 
-    reduction_function = get_reduction_function(INSTRUMENT)
+    reduction_function: Callable[[], None] = get_reduction_function(INSTRUMENT)
 
     script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
     script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
@@ -178,7 +183,6 @@ def start_live_reduction(
             datetime.datetime.now(tz=datetime.UTC) - script_last_executed_time
         ).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
             try:
-                # misc_data_collector.on_pre_exec(run_context)
                 logger.info("Executing reduction script")
                 reduction_function()
                 logger.info("Reduction script executed")
@@ -217,7 +221,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, _shutdown)
 
     # Setup consumers
-    kafka_config = {
+    kafka_config: dict[str, object] = {
         "bootstrap_servers": f"{KAFKA_IP}:{KAFKA_PORT}",
         "auto_offset_reset": "latest",
         "enable_auto_commit": True,
