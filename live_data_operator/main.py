@@ -52,10 +52,7 @@ class EndpointFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return (
-            record.getMessage().find("/healthz") == -1
-            and record.getMessage().find("/ready") == -1
-        )
+        return record.getMessage().find("/healthz") == -1 and record.getMessage().find("/ready") == -1
 
 
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
@@ -77,9 +74,7 @@ DEV_MODE = os.environ.get("DEV_MODE", "true").lower() == "true"
 
 
 CEPH_CREDS_SECRET_NAME = os.environ.get("CEPH_CREDS_SECRET_NAME", "ceph-creds")
-PROCESSOR_IMAGE = os.environ.get(
-    "LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb84cac95e094cdd245df6ca3bfb6"
-)
+PROCESSOR_IMAGE = os.environ.get("LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb84cac95e094cdd245df6ca3bfb6")
 CEPH_CREDS_SECRET_NAMESPACE = os.environ.get("CEPH_CREDS_SECRET_NAMESPACE", "fia")
 CLUSTER_ID = os.environ.get("CLUSTER_ID", "ba68226a-672f-4ba5-97bc-22840318b2ec")
 FS_NAME = os.environ.get("FS_NAME", "deneb")
@@ -91,9 +86,7 @@ def get_processor_image_sha() -> str:
     Get the processor image sha from the environment variable.
     We use a function so that if the image update changes, a reload is guaranteed
     """
-    return os.environ.get(
-        "LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb84cac95e094cdd245df6ca3bfb6"
-    )
+    return os.environ.get("LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb84cac95e094cdd245df6ca3bfb6")
 
 
 def processor_image_ref(sha: str) -> str:
@@ -132,9 +125,7 @@ def recreate_processor_deployment(instrument: str, namespace: str) -> None:
         )
     except ApiException as exc:
         if exc.status == HTTPStatus.NOT_FOUND:
-            logger.info(
-                "Deployment %s/%s not found; will create fresh.", namespace, name
-            )
+            logger.info("Deployment %s/%s not found; will create fresh.", namespace, name)
         else:
             raise
 
@@ -145,9 +136,7 @@ def recreate_processor_deployment(instrument: str, namespace: str) -> None:
         try:
             api.read_namespaced_deployment(name=name, namespace=namespace)
             if time.time() - start > delete_timeout:
-                raise TimeoutError(
-                    f"Timed out waiting for deletion of {namespace}/{name}"
-                )
+                raise TimeoutError(f"Timed out waiting for deletion of {namespace}/{name}")
             time.sleep(1)
         except ApiException as exc:
             if exc.status == HTTPStatus.NOT_FOUND:
@@ -177,16 +166,13 @@ def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
     """
 
     @wraps(func)
-    def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> Any:
+    def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> Any: 
         try:
             logger.info("Inside decorator")
             return func(*args, **kwargs)
         except ApiException as exc:
             if exc.status == HTTPStatus.CONFLICT:
-                logger.info(
-                    "resource created by %s already exists, skipping creation",
-                    func.__name__,
-                )
+                logger.info("resource created by %s already exists, skipping creation", func.__name__)
             else:
                 raise
 
@@ -203,9 +189,7 @@ def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
     """
 
     pv_name = f"livedataprocessor-{instrument}-archive-pv-smb"
-    metadata = V1ObjectMeta(
-        name=pv_name, annotations={"pv.kubernetes.io/provisioned-by": "smb.csi.k8s.io"}
-    )
+    metadata = V1ObjectMeta(name=pv_name, annotations={"pv.kubernetes.io/provisioned-by": "smb.csi.k8s.io"})
     secret_ref = V1SecretReference(name="archive-creds", namespace=secret_namespace)
     csi = V1CSIPersistentVolumeSource(
         driver="smb.csi.k8s.io",
@@ -221,9 +205,7 @@ def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
         mount_options=["noserverino", "_netdev", "vers=2.1"],
         csi=csi,
     )
-    archive_pv = V1PersistentVolume(
-        api_version="v1", kind="PersistentVolume", metadata=metadata, spec=spec
-    )
+    archive_pv = V1PersistentVolume(api_version="v1", kind="PersistentVolume", metadata=metadata, spec=spec)
     CoreV1Api().create_persistent_volume(archive_pv)
 
 
@@ -250,9 +232,7 @@ def _setup_archive_pvc(instrument: str, job_namespace: str) -> None:
         metadata=metadata,
         spec=spec,
     )
-    CoreV1Api().create_namespaced_persistent_volume_claim(
-        namespace=job_namespace, body=archive_pvc
-    )
+    CoreV1Api().create_namespaced_persistent_volume_claim(namespace=job_namespace, body=archive_pvc)
 
 
 @skip_conflict
@@ -277,9 +257,7 @@ def _setup_ceph_pv(
     """
     pv_name = f"livedataprocessor-{instrument}-ceph-pv"
     metadata = V1ObjectMeta(name=pv_name)
-    secret_ref = V1SecretReference(
-        name=ceph_creds_k8s_secret_name, namespace=ceph_creds_k8s_namespace
-    )
+    secret_ref = V1SecretReference(name=ceph_creds_k8s_secret_name, namespace=ceph_creds_k8s_namespace)
     csi = V1CSIPersistentVolumeSource(
         driver="cephfs.csi.ceph.com",
         node_stage_secret_ref=secret_ref,
@@ -300,9 +278,7 @@ def _setup_ceph_pv(
         volume_mode="Filesystem",
         csi=csi,
     )
-    ceph_pv = V1PersistentVolume(
-        api_version="v1", kind="PersistentVolume", metadata=metadata, spec=spec
-    )
+    ceph_pv = V1PersistentVolume(api_version="v1", kind="PersistentVolume", metadata=metadata, spec=spec)
     CoreV1Api().create_persistent_volume(ceph_pv)
 
 
@@ -332,17 +308,11 @@ def _setup_ceph_pvc(instrument: str, namespace: str) -> None:
         metadata=metadata,
         spec=spec,
     )
-    CoreV1Api().create_namespaced_persistent_volume_claim(
-        namespace=namespace, body=ceph_pvc
-    )
+    CoreV1Api().create_namespaced_persistent_volume_claim(namespace=namespace, body=ceph_pvc)
 
 
 def setup_deployment(
-    ceph_creds_k8s_secret_name: str,
-    cluster_id: str,
-    instrument: str,
-    namespace: str,
-    fs_name: str,
+    ceph_creds_k8s_secret_name: str, cluster_id: str, instrument: str, namespace: str, fs_name: str
 ) -> V1Deployment:
     """
     Sets up a Kubernetes Deployment for the Live Data Processor.
@@ -358,9 +328,7 @@ def setup_deployment(
     :return: Configured V1Deployment object ready for deployment in Kubernetes.
     """
 
-    _setup_ceph_pv(
-        ceph_creds_k8s_secret_name, namespace, cluster_id, fs_name, instrument
-    )
+    _setup_ceph_pv(ceph_creds_k8s_secret_name, namespace, cluster_id, fs_name, instrument)
     _setup_ceph_pvc(instrument, namespace)
     _setup_archive_pv(instrument, namespace)
     _setup_archive_pvc(instrument, namespace)
@@ -368,9 +336,7 @@ def setup_deployment(
     container = V1Container(
         name=f"livedataprocessor-{instrument}",
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
-        resources=V1ResourceRequirements(
-            requests={"memory": "32Gi"}, limits={"memory": "128Gi"}
-        ),
+        resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "128Gi"}),
         volume_mounts=[
             V1VolumeMount(name="ceph-mount", mount_path="/output"),
             V1VolumeMount(name="archive-mount", mount_path="/archive"),
@@ -385,41 +351,32 @@ def setup_deployment(
         containers=[container],
         restart_policy="Always",
         service_account="live-data-operator",
-        tolerations=[
-            V1Toleration(
-                key="staging", operator="Equal", value="big", effect="NoSchedule"
-            )
-        ],
+        tolerations=[V1Toleration(key="staging", operator="Equal", value="big", effect="NoSchedule")],
         volumes=[
             V1Volume(
                 name="ceph-mount",
                 persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
-                    claim_name=f"livedataprocessor-{instrument}-ceph-pvc",
-                    read_only=False,
+                    claim_name=f"livedataprocessor-{instrument}-ceph-pvc", read_only=False
                 ),
             ),
             V1Volume(
                 name="archive-mount",
                 persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
-                    claim_name=f"livedataprocessor-{instrument}-archive-pvc",
-                    read_only=True,
+                    claim_name=f"livedataprocessor-{instrument}-archive-pvc", read_only=True
                 ),
             ),
         ],
     )
     labels = {"app": f"livedataprocessor-{instrument}"}
     template = V1PodTemplateSpec(metadata=V1ObjectMeta(labels=labels), spec=pod_spec)
-    deployment_spec = V1DeploymentSpec(
-        replicas=1, selector=V1LabelSelector(match_labels=labels), template=template
-    )
+    deployment_spec = V1DeploymentSpec(replicas=1, selector=V1LabelSelector(match_labels=labels), template=template)
 
     return V1Deployment(
         api_version="apps/v1",
         kind="Deployment",
         spec=deployment_spec,
         metadata=V1ObjectMeta(
-            name=f"livedataprocessor-{instrument}-deployment",
-            labels={"processor-image-sha": PROCESSOR_IMAGE[0:12]},
+            name=f"livedataprocessor-{instrument}-deployment", labels={"processor-image-sha": PROCESSOR_IMAGE[0:12]}
         ),
     )
 
@@ -436,30 +393,17 @@ def start_live_data_processor(instrument: str) -> None:
     :return: None
     """
 
-    body = setup_deployment(
-        CEPH_CREDS_SECRET_NAME,
-        CLUSTER_ID,
-        instrument,
-        CEPH_CREDS_SECRET_NAMESPACE,
-        FS_NAME,
-    )
-    body = ApiClient().sanitize_for_serialization(
-        body
-    )  # serialize so kopf may adopt it
+    body = setup_deployment(CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME)
+    body = ApiClient().sanitize_for_serialization(body)  # serialize so kopf may adopt it
     kopf.adopt(body)
 
     try:
-        AppsV1Api().create_namespaced_deployment(
-            namespace=CEPH_CREDS_SECRET_NAMESPACE, body=body
-        )
+        AppsV1Api().create_namespaced_deployment(namespace=CEPH_CREDS_SECRET_NAMESPACE, body=body)
     except ApiException as exc:
         if exc.status == HTTPStatus.CONFLICT:
-            logger.info(
-                "Deployment already exists, Deleting previous deployment and creating new one"
-            )
+            logger.info("Deployment already exists, Deleting previous deployment and creating new one")
             AppsV1Api().delete_namespaced_deployment(
-                name=f"livedataprocessor-{instrument}-deployment",
-                namespace=CEPH_CREDS_SECRET_NAMESPACE,
+                name=f"livedataprocessor-{instrument}-deployment", namespace=CEPH_CREDS_SECRET_NAMESPACE
             )
             start_live_data_processor(instrument)
         else:
