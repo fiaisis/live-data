@@ -15,7 +15,7 @@ dependencies = [
 formatting = [
     "ruff==0.5.4",
     "mypy==1.11.0",
-    "live-data[test]",
+    "live-data-operator[test]",
     "types-requests==2.32.0.20240712",
     "types-urllib3==1.26.25.14",
     "types-aiofiles==24.1.0.20240626",
@@ -29,8 +29,7 @@ test = [
 ]
 
 all = [
-    "live-data[test]",
-    "live-data[formatting]"
+    "live-data-operator[formatting]"
 ]
 
 
