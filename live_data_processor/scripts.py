@@ -3,6 +3,7 @@ import inspect
 import logging
 import os
 from collections.abc import Callable
+from http import HTTPStatus
 from pathlib import Path
 
 import requests
@@ -19,8 +20,8 @@ def get_script(instrument: str) -> str | None:
     :returns: The content of the live data processing script as a string.
     """
 
-    response = requests.get(f"{FIA_API_URL}/live-data/{instrument.lower()}/script")
-    return response.json() if response.status_code == 200 else None
+    response = requests.get(f"{FIA_API_URL}/live-data/{instrument.lower()}/script", timeout=5)
+    return response.json() if response.status_code == HTTPStatus.OK else None
 
 
 def write_reduction_script(script: str) -> None:
@@ -43,11 +44,11 @@ def get_reduction_function(instrument: str) -> Callable[[], None]:
     """
 
     try:
-        import reduction_script  # noqa: PLC0415
+        import reduction_script
     except ImportError:
         initialize_script = get_script(os.environ["INSTRUMENT"].lower())
         write_reduction_script(initialize_script)
-        import reduction_script  # noqa: PLC0415
+        import reduction_script
     latest_script = get_script(instrument)
     write_reduction_script(latest_script)
     importlib.reload(reduction_script)
