@@ -34,7 +34,7 @@ logging.basicConfig(
     format="[%(asctime)s]-%(name)s-%(levelname)s: %(message)s",
     level=logging.INFO,
 )
-ConfigService.setLogLevel(3) 
+ConfigService.setLogLevel(3)
 logger = logging.getLogger(__name__)
 UTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "/output")
 KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
@@ -58,7 +58,6 @@ kafka_config: dict[str, object] = {
     "security_protocol": "PLAINTEXT",
     "api_version_auto_timeout_ms": 60000,
 }
-
 
 
 def process_events(events: EventMessage) -> None:
@@ -142,6 +141,7 @@ def process_message(message: Any) -> None:
                 datetime.datetime.fromtimestamp(log_data.timestamp_unix_ns / 1e9, tz=datetime.UTC).isoformat(),
                 log_data.value,
             )
+
 
 def start_live_reduction(
     events_consumer: KafkaConsumer,
