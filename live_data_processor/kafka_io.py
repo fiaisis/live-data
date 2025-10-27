@@ -42,7 +42,7 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     messages = []
     for index, message in enumerate(runinfo_consumer):
         messages.append(message.value)
-        if index == 3:  # Final index = 2 for 3 messages
+        if index == 3:  # Final index = 2 for 3 messages  # noqa: PLR2004
             break
     if len(messages) < 1:
         raise TopicIncompleteError("Topic does not have any messages from which to read. %s", f"{instrument}_runInfo")
