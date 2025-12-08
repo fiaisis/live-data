@@ -1,3 +1,10 @@
+"""
+Kafka IO utilities for live data processing.
+
+This module provides helper functions to configure Kafka consumers,
+seek to relevant offsets based on run start messages, and locate the
+most recent RunStart message for an instrument.
+"""
 import logging
 import os
 import sys
@@ -17,6 +24,11 @@ KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
 
 
 def datetime_from_record_timestamp(timestamp: int) -> str:
+    """Convert a Kafka record timestamp (ms since epoch) to a readable string.
+
+    :param timestamp: Milliseconds since Unix epoch from a Kafka record.
+    :return: Timestamp formatted as YYYY-MM-DD HH:MM:SS in UTC.
+    """
     return datetime.fromtimestamp(timestamp / 1000.0, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -45,7 +57,10 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
         if index == 3:  # Final index = 2 for 3 messages  # noqa: PLR2004
             break
     if len(messages) < 1:
-        raise TopicIncompleteError("Topic does not have any messages from which to read. %s", f"{instrument}_runInfo")
+        raise TopicIncompleteError(
+            "Topic does not have any messages from which to read. %s",
+            f"{instrument}_runInfo",
+        )
     for message in reversed(messages):
         if RunStart.RunStartBufferHasIdentifier(message, 0):
             latest_start = RunStart.GetRootAsRunStart(message, 0)
@@ -61,7 +76,12 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     return latest_start
 
 
-def seek_event_consumer_to_runstart(instrument: str, run_start: RunStart, events_consumer: KafkaConsumer) -> None:
+def seek_event_consumer_to_runstart(
+    instrument: str,
+    run_start: RunStart,
+    events_consumer: KafkaConsumer,
+    streaming_kafka_sample_log: bool = False,
+) -> None:
     """
     Adjust the given event consumer's position to the beginning of the given run
     :param run_start: The run start message to seek to.
@@ -72,9 +92,11 @@ def seek_event_consumer_to_runstart(instrument: str, run_start: RunStart, events
     run_start_ms = run_start.StartTime()
     timestamp = datetime_from_record_timestamp(run_start_ms)
     logger.info("Seeking event consumer to run start: %s", timestamp)
-
+    topics = (
+        [f"{instrument}_events", f"{instrument}_sampleEnv"] if streaming_kafka_sample_log else [f"{instrument}_events"]
+    )
     # Find the offset for a given time and seek to it
-    for topic in [f"{instrument}_events", f"{instrument}_sampleEnv"]:
+    for topic in topics:
         tp = TopicPartition(topic, 0)
         offset_info = events_consumer.offsets_for_times({tp: run_start_ms})[tp]
         if offset_info is None or offset_info.offset is None:
@@ -87,12 +109,19 @@ def seek_event_consumer_to_runstart(instrument: str, run_start: RunStart, events
         events_consumer.seek(tp, offset_info.offset)
 
 
-def setup_consumers(instrument: str, kafka_config: dict[str, Any]) -> tuple[KafkaConsumer, KafkaConsumer]:
+def setup_consumers(
+    instrument: str,
+    kafka_config: dict[str, Any],
+    kafka_sample_log_streaming: bool = False,
+) -> tuple[KafkaConsumer, KafkaConsumer]:
     """
     Create the consumers for events and runinfo
     :return: A tuple of KafkaConsumer objects for events and runinfo.
     """
     events_consumer = KafkaConsumer(**kafka_config)
-    runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", consumer_timeout_ms=1000, **kafka_config)
-    events_consumer.subscribe([f"{instrument}_events", f"{instrument}_sampleEnv"])
+    runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", consumer_timeout_ms=5000, **kafka_config)
+    if kafka_sample_log_streaming:
+        events_consumer.subscribe([f"{instrument}_events", f"{instrument}_sampleEnv"])
+    else:
+        events_consumer.subscribe([f"{instrument}_events"])
     return events_consumer, runinfo_consumer

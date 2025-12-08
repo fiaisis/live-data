@@ -1,3 +1,10 @@
+"""
+Main module for the live data processor.
+
+This module wires together Kafka consumers, Mantid workspaces, and the
+reduction script refresh/execute loop to process neutron event data in
+near real-time for a selected instrument.
+"""
 import contextlib
 import datetime
 import logging
@@ -12,7 +19,7 @@ from kafka import KafkaConsumer
 from mantid import ConfigService
 from mantid.api import mtd
 from mantid.kernel import DateAndTime
-from mantid.simpleapi import AddTimeSeriesLog
+from mantid.simpleapi import AddTimeSeriesLog, RemoveWorkspaceHistory
 from streaming_data_types import deserialise_f144
 from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMessage
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
@@ -25,7 +32,10 @@ from live_data_processor.kafka_io import (
     seek_event_consumer_to_runstart,
     setup_consumers,
 )
-from live_data_processor.scripts import get_reduction_function, refresh_reduction_function
+from live_data_processor.scripts import (
+    get_reduction_function,
+    refresh_reduction_function,
+)
 from live_data_processor.workspaces import initialize_instrument_workspace
 
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
@@ -41,7 +51,7 @@ KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
 KAFKA_PORT: int = int(os.environ.get("KAFKA_PORT", "31092"))
 INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
 SCRIPT_UPDATE_INTERVAL: int = int(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
-SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(60 * 5)))
+SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(60)))
 RUN_CHECK_INTERVAL: float = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
 LIVE_WS_NAME: str = os.environ.get("LIVE_WS", "lives")
 GITHUB_API_TOKEN: str = os.environ.get("GITHUB_API_TOKEN", "shh")
@@ -101,18 +111,21 @@ def initialize_run(
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     run_start: RunStart | None = None,
+    streaming_kafka_sample_log: bool = False,
 ) -> RunStart:
     """
-    Initialize a run by finding the latest run start message, processing it, and seeking the event consumer.
+    Initialize a run by finding the latest RunStart, preparing workspace, and seeking consumers.
 
-    This function either uses the provided run_start message or finds the latest one,
-    processes the run start message, and positions the event consumer at the beginning of the run.
+    This either uses the provided run_start or locates the latest one on the
+    runInfo topic. It initializes the Mantid workspace for the instrument and
+    seeks the events consumer to the run start timestamp.
 
-    :param events_consumer: The Kafka consumer for the events topic.
-    :param runinfo_consumer: The Kafka consumer for the runinfo topic.
-    :param run_start: Optional RunStart message. If None, the latest one will be found.
-    :return: The RunStart message that was processed.
-    :raises TopicIncompleteError: If no RunStart message is found in the runinfo topic.
+    :param events_consumer: Kafka consumer subscribed to the <instrument>_events topic.
+    :param runinfo_consumer: Kafka consumer for <instrument>_runInfo used to locate RunStart.
+    :param run_start: Optional RunStart message to use; if None, the latest will be fetched.
+    :param streaming_kafka_sample_log: If True, sample log topic is also considered for seeking.
+    :return: The RunStart message that was resolved and used to initialize the run.
+    :raises TopicIncompleteError: If no RunStart message can be found on runInfo.
     """
     logger.info("Initializing run: %s", str(run_start))
 
@@ -126,12 +139,22 @@ def initialize_run(
     return run_start
 
 
-def process_message(message: Any) -> None:
+def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
+    """Process a single Kafka message from the events or sample-env topics.
+
+    Depending on the message schema, this will either add event data to the
+    live workspace (ev42) or, when enabled, append sample-environment logs
+    (f144) as Mantid time series logs.
+
+    :param message: A Kafka message object with a binary payload in message.value.
+    :param kafka_sample_streaming: If True, process f144 sample log messages as well.
+    :return: None
+    """
     schema = get_schema(message.value)
     if schema == "ev42":
         events = EventMessage.GetRootAsEventMessage(message.value, 0)
         process_events(events)
-    elif schema == "f144":
+    elif kafka_sample_streaming and schema == "f144":
         log_data = deserialise_f144(message.value)
         source = log_data.source_name.replace("IN:MERLIN:CS:SB:", "").title()
         with contextlib.suppress(TypeError):
@@ -147,21 +170,28 @@ def start_live_reduction(
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     run_start: RunStart | None = None,
+    kafka_sample_log_streaming: bool = False,
 ) -> None:
     """
     Start the live data reduction loop for processing neutron event data.
 
-    This function initializes a run, processes event messages from the Kafka consumer,
-    periodically checks for updated processing scripts, and monitors for new runs.
-    If a new script or run is detected, it restarts the reduction process accordingly.
+    Initializes a run, consumes Kafka messages, periodically refreshes and
+    executes the instrument reduction function, and watches for new runs.
+    When a new RunStart is detected it tail-calls itself to switch to the
+    next run.
 
-    :param script: The Mantid processing script to execute for live data reduction.
-    :param events_consumer: The Kafka consumer for the events topic.
-    :param runinfo_consumer: The Kafka consumer for the runinfo topic.
-    :param run_start: Optional RunStart message. If None, the latest one will be found.
+    :param events_consumer: Kafka consumer subscribed to the events topic.
+    :param runinfo_consumer: Kafka consumer for the runInfo topic.
+    :param run_start: Optional RunStart message to start from; latest will be used if None.
+    :param kafka_sample_log_streaming: If True, consume f144 sample log messages and add them as Mantid logs.
     :return: None
     """
-    current_run_start = initialize_run(events_consumer, runinfo_consumer, run_start)
+    current_run_start = initialize_run(
+        events_consumer,
+        runinfo_consumer,
+        run_start,
+        streaming_kafka_sample_log=kafka_sample_log_streaming,
+    )
     logger.info("Run began at %s", datetime_from_record_timestamp(current_run_start.StartTime()))
     logger.info("Starting live data reduction loop")
 
@@ -183,6 +213,19 @@ def start_live_reduction(
             datetime.datetime.now(tz=datetime.UTC) - script_last_executed_time
         ).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
             try:
+                if not kafka_sample_log_streaming:
+                    with open("merlin_log.txt") as f:
+                        for line in f.readlines():
+                            source, value, timestamp = line.split(" - ")
+                            AddTimeSeriesLog(
+                                "lives",
+                                source,
+                                timestamp,
+                                value,
+                            )
+                    ws = mtd[LIVE_WS_NAME]
+                    RemoveWorkspaceHistory(ws)
+
                 logger.info("Executing reduction script")
                 reduction_function()
                 logger.info("Reduction script executed")
@@ -231,8 +274,15 @@ def main() -> None:
         "api_version_auto_timeout_ms": 60000,
     }
     events_consumer, runinfo_consumer = setup_consumers(INSTRUMENT, kafka_config)
+    kafka_sample_streaming = False
+
+    # init_pvs()  # discover and connect PVs
+    # thread, stop_event = start_logging_thread("merlin_log.txt")
 
     start_live_reduction(events_consumer, runinfo_consumer)
+
+    # stop_event.set()
+    # thread.join()
 
 
 if __name__ == "__main__":
