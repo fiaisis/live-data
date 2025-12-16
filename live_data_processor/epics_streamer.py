@@ -25,7 +25,6 @@ for coordinated shutdown.
 Failure to discover PVs or write to the log file is considered fatal to the
 reduction workflow and results in `SampleLogError` being raised.
 """
-
 import binascii
 import datetime
 import logging
