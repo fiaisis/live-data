@@ -5,6 +5,7 @@ This module provides helper functions to configure Kafka consumers,
 seek to relevant offsets based on run start messages, and locate the
 most recent RunStart message for an instrument.
 """
+
 import logging
 import os
 import sys
@@ -29,10 +30,14 @@ def datetime_from_record_timestamp(timestamp: int) -> str:
     :param timestamp: Milliseconds since Unix epoch from a Kafka record.
     :return: Timestamp formatted as YYYY-MM-DD HH:MM:SS in UTC.
     """
-    return datetime.fromtimestamp(timestamp / 1000.0, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.fromtimestamp(timestamp / 1000.0, tz=UTC).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 
 
-def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> RunStart | None:
+def find_latest_run_start(
+    runinfo_consumer: KafkaConsumer, instrument: str
+) -> RunStart | None:
     """
     Find the latest RunStart message in the runinfo topic.
 
@@ -93,7 +98,9 @@ def seek_event_consumer_to_runstart(
     timestamp = datetime_from_record_timestamp(run_start_ms)
     logger.info("Seeking event consumer to run start: %s", timestamp)
     topics = (
-        [f"{instrument}_events", f"{instrument}_sampleEnv"] if streaming_kafka_sample_log else [f"{instrument}_events"]
+        [f"{instrument}_events", f"{instrument}_sampleEnv"]
+        if streaming_kafka_sample_log
+        else [f"{instrument}_events"]
     )
     # Find the offset for a given time and seek to it
     for topic in topics:
@@ -119,7 +126,9 @@ def setup_consumers(
     :return: A tuple of KafkaConsumer objects for events and runinfo.
     """
     events_consumer = KafkaConsumer(**kafka_config)
-    runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", consumer_timeout_ms=5000, **kafka_config)
+    runinfo_consumer = KafkaConsumer(
+        f"{instrument}_runInfo", consumer_timeout_ms=10000, **kafka_config
+    )
     if kafka_sample_log_streaming:
         events_consumer.subscribe([f"{instrument}_events", f"{instrument}_sampleEnv"])
     else:
