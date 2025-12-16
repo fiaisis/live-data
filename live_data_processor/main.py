@@ -5,6 +5,7 @@ This module wires together Kafka consumers, Mantid workspaces, and the
 reduction script refresh/execute loop to process neutron event data in
 near real-time for a selected instrument.
 """
+
 import contextlib
 import datetime
 import logging
@@ -50,6 +51,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 ConfigService.setLogLevel(3)
+# ConfigService.appendDataSearchDir("~/work/live-data")
 logger = logging.getLogger(__name__)
 UTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "/output")
 KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
@@ -166,7 +168,9 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
             AddTimeSeriesLog(
                 "lives",
                 source,
-                datetime.datetime.fromtimestamp(log_data.timestamp_unix_ns / 1e9, tz=datetime.UTC).isoformat(),
+                datetime.datetime.fromtimestamp(
+                    log_data.timestamp_unix_ns / 1e9, tz=datetime.UTC
+                ).isoformat(),
                 log_data.value,
             )
 
@@ -338,7 +342,7 @@ def main() -> None:
             kafka_sample_log_streaming=kafka_sample_streaming,
             epics_proc=epics_proc,
             epics_stop_event=epics_stop_event,
-            epics_log_file=f"{INSTRUMENT}_log.txt",
+            epics_log_file=f"{INSTRUMENT.lower()}_log.txt",
         )
 
     finally:
