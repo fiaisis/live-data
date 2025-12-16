@@ -25,7 +25,9 @@ for coordinated shutdown.
 Failure to discover PVs or write to the log file is considered fatal to the
 reduction workflow and results in `SampleLogError` being raised.
 """
+
 import binascii
+import contextlib
 import datetime
 import logging
 import multiprocessing as mp
@@ -34,6 +36,7 @@ import queue
 import threading
 import time
 import zlib
+from multiprocessing import Process
 from pathlib import Path
 from typing import Any
 
@@ -241,3 +244,30 @@ def start_logging_process(
     )
     proc.start()
     return proc, stop_event
+
+
+def restart_epics_streaming(
+    epics_log_file: str, epics_proc: Process | Any, epics_stop_event
+) -> tuple[Process, mp.Event]:
+    """
+    Restart the background epics streaming process
+
+    :param epics_log_file: The file to write logs to
+    :param epics_proc: The currently running streaming process
+    :param epics_stop_event: The stop event of the currently running streaming process
+    :return: The newly restarted process and stop event
+    """
+    # Stop existing EPICS logging process (if any)
+    if epics_stop_event is not None:
+        epics_stop_event.set()
+
+    with contextlib.suppress(Exception):
+        if epics_proc is not None:
+            epics_proc.join(timeout=5)
+            if epics_proc.is_alive():
+                epics_proc.terminate()
+                epics_proc.join(timeout=2)
+
+    # Start a fresh EPICS logging process for the new run
+    epics_proc, epics_stop_event = start_logging_process(epics_log_file)
+    return epics_proc, epics_stop_event
