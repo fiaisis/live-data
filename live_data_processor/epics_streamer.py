@@ -68,10 +68,7 @@ def _load_block_names() -> list[str]:
     """Fetch and parse block names from BLOCKSERVER once."""
     raw = bytes(caget("IN:MERLIN:CS:BLOCKSERVER:BLOCKNAMES"))
     decoded = dehex_and_decompress(raw).decode()
-    return [
-        n.replace("[", "").replace("]", "").replace(" ", "").replace('"', "")
-        for n in decoded.split(",")
-    ]
+    return [n.replace("[", "").replace("]", "").replace(" ", "").replace('"', "") for n in decoded.split(",")]
 
 
 def _make_monitor_callback(event_queue: "queue.Queue[EventT]"):
@@ -167,9 +164,7 @@ def _writer_loop(
             f.write(line)
 
 
-def _process_entrypoint(
-    file_path: str, stop_event: "mp.Event", wait_timeout: float = 1.0
-) -> None:
+def _process_entrypoint(file_path: str, stop_event: "mp.Event", wait_timeout: float = 1.0) -> None:
     """
     Child process entrypoint: clears file, initialises PVs and drains the queue to file.
     The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
@@ -183,26 +178,16 @@ def _process_entrypoint(
             pass
     except Exception as exc:
         logger.exception("Failed to clear epics logs file, reduction is ruined.")
-        raise SampleLogError(
-            "Failed to clear the epics logs file, reduction is ruined."
-        ) from exc
+        raise SampleLogError("Failed to clear the epics logs file, reduction is ruined.") from exc
 
     try:
         pv_map = init_pvs(event_queue=event_queue, wait_timeout=wait_timeout)
         if not pv_map:
-            logger.critical(
-                "Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless"
-            )
-            raise SampleLogError(
-                "No PVs were discovered, therefore no epics values will be streamed."
-            )
+            logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+            raise SampleLogError("No PVs were discovered, therefore no epics values will be streamed.")
     except Exception as exc:
-        logger.critical(
-            "Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless"
-        )
-        raise SampleLogError(
-            "Failed to discover any PVs, therefore no epics values will be streamed."
-        ) from exc
+        logger.critical("Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+        raise SampleLogError("Failed to discover any PVs, therefore no epics values will be streamed.") from exc
 
     # Use a local loop; do not spawn extra threads in the child process for simplicity
     with Path(file_path).open("a", encoding="utf-8") as f:
@@ -221,14 +206,10 @@ def _process_entrypoint(
                 f.write(line)
                 f.flush()
             except Exception as exc:
-                raise SampleLogError(
-                    "Failed to write to epics logs file, reduction is ruined."
-                ) from exc
+                raise SampleLogError("Failed to write to epics logs file, reduction is ruined.") from exc
 
 
-def start_logging_process(
-    file_path: str, wait_timeout: float = 1.0
-) -> tuple[mp.Process, mp.Event]:
+def start_logging_process(file_path: str, wait_timeout: float = 1.0) -> tuple[mp.Process, mp.Event]:
     """
     Start a background process that streams EPICS updates to a file.
 
