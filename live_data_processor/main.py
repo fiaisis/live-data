@@ -51,7 +51,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 ConfigService.setLogLevel(3)
-# ConfigService.appendDataSearchDir("~/work/live-data")
+# ConfigService.appendDataSearchDir("~/work/live-data")  # noqa: ERA001
 logger = logging.getLogger(__name__)
 UTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "/output")
 KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
@@ -175,7 +175,7 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
             )
 
 
-def start_live_reduction(
+def start_live_reduction(  # noqa: C901
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     kafka_sample_log_streaming: bool = False,
