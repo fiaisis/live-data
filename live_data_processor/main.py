@@ -168,9 +168,7 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
             AddTimeSeriesLog(
                 "lives",
                 source,
-                datetime.datetime.fromtimestamp(
-                    log_data.timestamp_unix_ns / 1e9, tz=datetime.UTC
-                ).isoformat(),
+                datetime.datetime.fromtimestamp(log_data.timestamp_unix_ns / 1e9, tz=datetime.UTC).isoformat(),
                 log_data.value,
             )
 
@@ -235,18 +233,12 @@ def start_live_reduction(  # noqa: C901
             now = datetime.datetime.now(tz=datetime.UTC)
 
             # Refresh reduction function
-            if (
-                now - script_last_checked_time
-            ).total_seconds() > SCRIPT_UPDATE_INTERVAL:
-                reduction_function = refresh_reduction_function(
-                    reduction_function, INSTRUMENT
-                )
+            if (now - script_last_checked_time).total_seconds() > SCRIPT_UPDATE_INTERVAL:
+                reduction_function = refresh_reduction_function(reduction_function, INSTRUMENT)
                 script_last_checked_time = now
 
             # Execute reduction function periodically
-            if (
-                now - script_last_executed_time
-            ).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
+            if (now - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
                 try:
                     if not kafka_sample_log_streaming:
                         with Path(epics_log_file).open("r", encoding="utf-8") as f:
@@ -277,10 +269,7 @@ def start_live_reduction(  # noqa: C901
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
                 latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
-                if (
-                    latest_runstart is not None
-                    and latest_runstart.RunName() != current_run_start.RunName()
-                ):
+                if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
                     logger.info(
                         "New run detected: RunStart message at %s",
                         datetime_from_record_timestamp(latest_runstart.StartTime()),
@@ -329,9 +318,7 @@ def main() -> None:
     kafka_sample_streaming = False
 
     if not kafka_sample_streaming:
-        epics_proc, epics_stop_event = start_logging_process(
-            f"{INSTRUMENT.lower()}_log.txt"
-        )
+        epics_proc, epics_stop_event = start_logging_process(f"{INSTRUMENT.lower()}_log.txt")
     else:
         epics_proc, epics_stop_event = None, None
 
