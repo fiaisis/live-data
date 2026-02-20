@@ -8,7 +8,6 @@ most recent RunStart message for an instrument.
 
 import logging
 import os
-import sys
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,7 +15,7 @@ from kafka import KafkaConsumer, TopicPartition
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 from streaming_data_types.fbschemas.run_stop_6s4t.RunStop import RunStop
 
-from live_data_processor.exceptions import TopicIncompleteError
+from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteError
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +105,7 @@ def seek_event_consumer_to_runstart(
                 "https://isiscomputinggroup.github.io/WebDashboard/instruments",
                 topic,
             )
-            sys.exit(0)
+            raise OffsetNotFoundError(f"No offset found for topic {topic} at time {timestamp}")
         events_consumer.seek(tp, offset_info.offset)
 
 

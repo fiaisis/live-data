@@ -14,6 +14,7 @@ import signal
 import sys
 from collections.abc import Callable
 from pathlib import Path
+import time
 from types import FrameType
 from typing import Any
 
@@ -31,7 +32,7 @@ from live_data_processor.epics_streamer import (
     restart_epics_streaming,
     start_logging_process,
 )
-from live_data_processor.exceptions import TopicIncompleteError
+from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteError
 from live_data_processor.kafka_io import (
     datetime_from_record_timestamp,
     find_latest_run_start,
@@ -209,12 +210,17 @@ def start_live_reduction(  # noqa: C901
     reduction_function: Callable[[], None] = get_reduction_function(INSTRUMENT)
 
     while True:
-        current_run_start = initialize_run(
-            events_consumer,
-            runinfo_consumer,
-            current_run_start,
-            streaming_kafka_sample_log=kafka_sample_log_streaming,
-        )
+        try:
+            current_run_start = initialize_run(
+                events_consumer,
+                runinfo_consumer,
+                current_run_start,
+                streaming_kafka_sample_log=kafka_sample_log_streaming,
+            )
+        except (TopicIncompleteError, OffsetNotFoundError) as ex:
+            logger.warning("Could not initialize run: %s. Retrying in %s seconds...", ex, RUN_CHECK_INTERVAL)
+            time.sleep(RUN_CHECK_INTERVAL)
+            continue
         logger.info(
             "Run began at %s",
             datetime_from_record_timestamp(current_run_start.StartTime()),

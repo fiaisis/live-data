@@ -4,3 +4,7 @@ class TopicIncompleteError(RuntimeError):
 
 class SampleLogError(RuntimeError):
     """Raised when there is an error with the sample log"""
+
+
+class OffsetNotFoundError(RuntimeError):
+    """Raised when the offset is not found"""
