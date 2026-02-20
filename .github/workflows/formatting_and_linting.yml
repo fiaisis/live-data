@@ -13,9 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout project
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        if: github.actor != 'dependabot[bot]'
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.1.1
         with:
-          token: ${{ secrets.WRITE_PACKAGE_TOKEN }}
+          token: ${{ secrets.COMMIT_TOKEN }}
+
+      - name: Checkout project (dependabot)
+        if: github.actor == 'dependabot[bot]'
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.1.1
 
       - name: Set up Python
         uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55 # v5.5.0
