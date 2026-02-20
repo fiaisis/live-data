@@ -188,6 +188,7 @@ def start_live_reduction(
                 logger.info("Reduction script executed")
             except Exception as exc:
                 logger.warning("Error occurred in reduction", exc_info=exc)
+                report_traceback(INSTRUMENT, traceback.format_exc())
                 continue
             finally:
                 script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)

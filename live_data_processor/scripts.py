@@ -10,7 +10,34 @@ import requests
 
 logger = logging.getLogger(__name__)
 FIA_API_URL = os.environ.get("FIA_API_URL", "https://dev.reduce.isis.cclrc.ac.uk/api")
+FIA_API_API_KEY = os.environ.get("FIA_API_API_KEY")
 REDUCTION_SCRIPT_PATH = Path("reduction_script.py")
+
+
+def report_traceback(instrument: str, traceback_str: str) -> None:
+    """
+    Report a traceback to the FIA API for a specific instrument.
+
+    :param instrument: The instrument name
+    :param traceback_str: The traceback content
+    :return: None
+    """
+    if not FIA_API_API_KEY:
+        logger.warning("FIA_API_API_KEY not set, cannot report traceback")
+        return
+
+    logger.info("Reporting traceback for %s", instrument)
+    try:
+        response = requests.post(
+            f"{FIA_API_URL}/live-data/{instrument.lower()}/traceback",
+            json={"value": traceback_str},
+            headers={"Authorization": f"Bearer {FIA_API_API_KEY}"},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            logger.warning("Failed to report traceback: %s", response.text)
+    except Exception as exc:
+        logger.warning("Error reporting traceback", exc_info=exc)
 
 
 def get_script(instrument: str) -> str | None:
