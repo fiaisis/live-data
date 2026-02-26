@@ -13,11 +13,13 @@ import os
 import signal
 import sys
 import time
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from types import FrameType
 from typing import Any
 
+import redis
 from kafka import KafkaConsumer
 from mantid import ConfigService
 from mantid.api import mtd
@@ -63,6 +65,11 @@ SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", s
 RUN_CHECK_INTERVAL: float = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
 LIVE_WS_NAME: str = os.environ.get("LIVE_WS", "lives")
 GITHUB_API_TOKEN: str = os.environ.get("GITHUB_API_TOKEN", "shh")
+VALKEY_HOST: str = os.environ.get("VALKEY_HOST", "localhost")
+VALKEY_PORT: int = int(os.environ.get("VALKEY_PORT", "6379"))
+
+valkey_client = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
+
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
 os.environ["EPICS_CA_ADDR_LIST"] = "130.246.39.152:5066"
 os.environ["EPICS_CA_AUTO_ADDR_LIST"] = "NO"
@@ -174,7 +181,7 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
             )
 
 
-def start_live_reduction(  # noqa: C901
+def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     kafka_sample_log_streaming: bool = False,
@@ -264,6 +271,11 @@ def start_live_reduction(  # noqa: C901
                     logger.info("Reduction script executed")
                 except Exception as exc:
                     logger.warning("Error occurred in reduction", exc_info=exc)
+                    try:
+                        tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+                        valkey_client.set(f"live_data:{INSTRUMENT}:traceback", tb_str)
+                    except Exception as redis_exc:
+                        logger.warning("Failed to store traceback in Valkey", exc_info=redis_exc)
                 finally:
                     script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
                     logger.info(
