@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -29,14 +29,14 @@ jobs:
           password: ${{ secrets.WRITE_PACKAGE_TOKEN }}
 
       - name: Checkout the Gitops repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: fiaisis/gitops
           token: ${{ secrets.GITOPS_STAGING_EDIT_TOKEN }}
 
       - name: Build and push live-data-operator Docker image
         id: live_data_operator_build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           file: ./container/operator.Dockerfile
           push: true
@@ -50,7 +50,7 @@ jobs:
           echo "::set-output name=digest::$FILTERED_DIGEST"
 
       - name: Edit the YAML live-data-operator.yml file for staging for live data operator
-        uses: mikefarah/yq@v4.44.1
+        uses: mikefarah/yq@v4.52.4
         with:
           cmd: yq e -i '.spec.template.spec.containers[] |= select(.name == "live-data-operator").image = "ghcr.io/fiaisis/live-data-operator@${{ steps.live_data_operator_build.outputs.digest }}"' './components/live-data-operator/envs/staging/live-data-operator.yml'
 
@@ -64,7 +64,7 @@ jobs:
 
       - name: Build and push live-data-processor Docker image
         id: live_data_processor_build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           file: ./container/processor.Dockerfile
           push: true
@@ -79,7 +79,7 @@ jobs:
 
 
       - name: Update LIVE_DATA_PROCESSOR_IMAGE in the Deployment YAML
-        uses: mikefarah/yq@v4.44.1
+        uses: mikefarah/yq@v4.52.4
         with:
           cmd: yq e -i '.spec.template.spec.containers[] |= (select(.name == "live-data-operator") | .env[] |= select(.name == "LIVE_DATA_PROCESSOR_IMAGE_SHA").value = "${{ steps.remove_sha256_processor.outputs.digest }}")' './components/live-data-operator/envs/staging/live-data-operator.yml'
 
