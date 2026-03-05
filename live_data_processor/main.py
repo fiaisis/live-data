@@ -336,7 +336,7 @@ def main() -> None:
     kafka_sample_streaming = False
 
     if not kafka_sample_streaming:
-        epics_proc, epics_stop_event = start_logging_process(f"{INSTRUMENT.lower()}_log.txt")
+        epics_proc, epics_stop_event = start_logging_process(f"/output/{INSTRUMENT.lower()}_log.txt")
     else:
         epics_proc, epics_stop_event = None, None
 
