@@ -1,9 +1,9 @@
 name: Build and Push Docker Images
 
-on:
-  push:
-    branches:
-      - main
+on: push
+#  push:
+#    branches:
+#      - main
 
 
 env:
@@ -54,13 +54,6 @@ jobs:
         with:
           cmd: yq e -i '.spec.template.spec.containers[] |= select(.name == "live-data-operator").image = "ghcr.io/fiaisis/live-data-operator@${{ steps.live_data_operator_build.outputs.digest }}"' './components/live-data-operator/envs/staging/live-data-operator.yml'
 
-      - name: Commit and push changes for live data operator
-        continue-on-error: true
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git commit -am "[CD] Update live-data/operator with this commit ${{ github.event.head_commit.url}}"
-          git push
 
       - name: Build and push live-data-processor Docker image
         id: live_data_processor_build
@@ -84,7 +77,7 @@ jobs:
           cmd: yq e -i '.spec.template.spec.containers[] |= (select(.name == "live-data-operator") | .env[] |= select(.name == "LIVE_DATA_PROCESSOR_IMAGE_SHA").value = "${{ steps.remove_sha256_processor.outputs.digest }}")' './components/live-data-operator/envs/staging/live-data-operator.yml'
 
 
-      - name: Commit and push changes for live data operator
+      - name: Commit and push changes for live data operator and processor
         continue-on-error: true
         run: |
           git config --local user.email "action@github.com"
