@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: Log in to the Container registry
         uses: docker/login-action@v4
@@ -29,7 +29,7 @@ jobs:
           password: ${{ secrets.WRITE_PACKAGE_TOKEN }}
 
       - name: Checkout the Gitops repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           repository: fiaisis/gitops
           token: ${{ secrets.GITOPS_STAGING_EDIT_TOKEN }}
@@ -50,7 +50,7 @@ jobs:
           echo "::set-output name=digest::$FILTERED_DIGEST"
 
       - name: Edit the YAML live-data-operator.yml file for staging for live data operator
-        uses: mikefarah/yq@v4.52.4
+        uses: mikefarah/yq@v4.52.5
         with:
           cmd: yq e -i '.spec.template.spec.containers[] |= select(.name == "live-data-operator").image = "ghcr.io/fiaisis/live-data-operator@${{ steps.live_data_operator_build.outputs.digest }}"' './components/live-data-operator/envs/staging/live-data-operator.yml'
 
@@ -79,7 +79,7 @@ jobs:
 
 
       - name: Update LIVE_DATA_PROCESSOR_IMAGE in the Deployment YAML
-        uses: mikefarah/yq@v4.52.4
+        uses: mikefarah/yq@v4.52.5
         with:
           cmd: yq e -i '.spec.template.spec.containers[] |= (select(.name == "live-data-operator") | .env[] |= select(.name == "LIVE_DATA_PROCESSOR_IMAGE_SHA").value = "${{ steps.remove_sha256_processor.outputs.digest }}")' './components/live-data-operator/envs/staging/live-data-operator.yml'
 
