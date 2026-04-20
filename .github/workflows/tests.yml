@@ -1,0 +1,39 @@
+---
+on: push
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493 # v4.1.7
+
+      - name: Set up python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up cache for Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        # We need to install both sets of dependencies to test both
+        run: |
+          python -m pip install --upgrade pip
+          cd live_data_processor
+          python -m pip install .
+          cd ../live_data_operator
+          python -m pip install .
+
+      - name: Run pytest
+        env:
+          PYTHONPATH: .
+        run: pytest test/ --random-order --random-order-bucket=global --cov --cov-report=xml
