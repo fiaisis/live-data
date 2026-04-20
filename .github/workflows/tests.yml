@@ -1,5 +1,9 @@
 ---
 on: push
+#  workflow_run:
+#    workflows: [ "Build and Push Docker Images" ]
+#    types:
+#      - completed
 
 permissions:
   contents: read
@@ -7,6 +11,7 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    container: "docker pull ghcr.io/fiaisis/mantid:latest"
     steps:
       - name: Checkout project
         uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493 # v4.1.7
