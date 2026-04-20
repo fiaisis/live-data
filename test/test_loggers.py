@@ -30,8 +30,9 @@ def test_valkey_stream_handler_emit_success():
 
     handler.emit(record)
 
+    # Update the dictionary here to expect "level": "INFO"
     mock_client.xadd.assert_called_once_with(
-        "test_stream", {"msg": "Test log message"}, maxlen=100
+        "test_stream", {"msg": "Test log message", "level": "INFO"}, maxlen=100
     )
 
 

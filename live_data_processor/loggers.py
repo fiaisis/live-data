@@ -39,7 +39,8 @@ class ValkeyStreamHandler(logging.Handler):
         """
         try:
             msg = self.format(record)
-            self.client.xadd(self.stream_key, {"msg": msg}, maxlen=self.maxlen)
+            # Add the level directly to the Valkey stream dictionary
+            self.client.xadd(self.stream_key, {"msg": msg, "level": record.levelname}, maxlen=self.maxlen)
         except Exception:
             self.handleError(record)
 

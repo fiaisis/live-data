@@ -355,6 +355,7 @@ def main() -> None:
     :return: None
     """
     ##################
+    external_logger.info("Starting live data processing for %s", INSTRUMENT)
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
