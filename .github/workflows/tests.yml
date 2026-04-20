@@ -22,7 +22,7 @@ jobs:
     needs: find-latest-fia-mantid-image
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/fiaisis/mantid:${{ needs.find-image.outputs.tag }}
+      image: ghcr.io/fiaisis/mantid:${{ needs.find-latest-fia-mantid-image.outputs.tag }}
     steps:
       - name: Checkout project
         uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493 # v4.1.7
