@@ -265,6 +265,7 @@ def start_live_reduction(  # noqa: C901
                 streaming_kafka_sample_log=kafka_sample_log_streaming,
             )
         except (TopicIncompleteError, OffsetNotFoundError) as ex:
+            external_logger.warning("No run could be found. Retrying in %s seconds...", RUN_CHECK_INTERVAL)
             internal_logger.warning("Could not initialize run: %s. Retrying in %s seconds...", ex, RUN_CHECK_INTERVAL)
             time.sleep(RUN_CHECK_INTERVAL)
             continue
