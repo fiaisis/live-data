@@ -1,9 +1,5 @@
 ---
 on: push
-#  workflow_run:
-#    workflows: [ "Build and Push Docker Images" ]
-#    types:
-#      - completed
 
 permissions:
   contents: read
@@ -62,3 +58,8 @@ jobs:
         env:
           PYTHONPATH: .
         run: pytest test/ --random-order --random-order-bucket=global --cov --cov-report=xml
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
