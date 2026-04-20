@@ -45,6 +45,7 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     :return: The latest RunStart message if found, None otherwise.
     :raises TopicIncompleteError: If the topic does not have any messages.
     """
+    external_logger.info("Attempting to find the latest run start...")
     latest_start = None
 
     # Set the offset to 3 messages from the end.
@@ -75,6 +76,7 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
             for message in messages
         ]
         internal_logger.warning("No run start found in runinfo topic. Messages: %s", messages)
+        external_logger.warning("No run start could be found.")
     return latest_start
 
 
