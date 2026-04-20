@@ -7,9 +7,9 @@ from kubernetes.client import ApiException
 
 from live_data_operator.main import (
     EndpointFilter,
-    skip_conflict,
-    setup_deployment,
     _setup_archive_pv,
+    setup_deployment,
+    skip_conflict,
 )
 
 
@@ -18,15 +18,21 @@ def test_endpoint_filter():
     filt = EndpointFilter()
 
     # Excluded matches
-    record_health = logging.LogRecord("test", logging.INFO, "path", 1, "GET /healthz HTTP/1.1", (), None)
-    record_ready = logging.LogRecord("test", logging.INFO, "path", 1, "GET /ready HTTP/1.1", (), None)
-    
-    assert filt.filter(record_health) == False
-    assert filt.filter(record_ready) == False
+    record_health = logging.LogRecord(
+        "test", logging.INFO, "path", 1, "GET /healthz HTTP/1.1", (), None
+    )
+    record_ready = logging.LogRecord(
+        "test", logging.INFO, "path", 1, "GET /ready HTTP/1.1", (), None
+    )
+
+    assert filt.filter(record_health) is False
+    assert filt.filter(record_ready) is False
 
     # Allowed matches
-    record_normal = logging.LogRecord("test", logging.INFO, "path", 1, "GET /status HTTP/1.1", (), None)
-    assert filt.filter(record_normal) == True
+    record_normal = logging.LogRecord(
+        "test", logging.INFO, "path", 1, "GET /status HTTP/1.1", (), None
+    )
+    assert filt.filter(record_normal) is True
 
 
 def test_skip_conflict():
@@ -40,7 +46,9 @@ def test_skip_conflict():
     decorated()  # Should not raise
 
     # Test it raises other exceptions
-    mock_func.side_effect = ApiException(status=HTTPStatus.NOT_FOUND, reason="Not Found")
+    mock_func.side_effect = ApiException(
+        status=HTTPStatus.NOT_FOUND, reason="Not Found"
+    )
     with pytest.raises(ApiException):
         decorated()
 
@@ -76,9 +84,9 @@ def test_setup_deployment(mock_ceph_pv, mock_ceph_pvc, mock_arch_pv, mock_arch_p
 
     assert deployment.metadata.name == "livedataprocessor-MERLIN-deployment"
     assert deployment.spec.replicas == 1
-    
+
     container = deployment.spec.template.spec.containers[0]
     assert container.name == "livedataprocessor-MERLIN"
-    
+
     env_vars = {e.name: e.value for e in container.env}
     assert env_vars["INSTRUMENT"] == "MERLIN"
