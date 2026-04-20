@@ -28,10 +28,20 @@ jobs:
         # We need to install both sets of dependencies to test both
         run: |
           python -m pip install --upgrade pip
-          cd live_data_processor
-          python -m pip install .
-          cd ../live_data_operator
-          python -m pip install .
+
+          python -c "
+          import tomllib, subprocess
+          
+          deps = []
+          for p in ['live_data_processor/pyproject.toml', 'live_data_operator/pyproject.toml']:
+              with open(p, 'rb') as f:
+                  data = tomllib.load(f)
+                  deps.extend(data['project']['dependencies'])
+                  deps.extend(data['project'].get('optional-dependencies', {}).get('test', []))
+          
+          print('Installing dependencies:', deps)
+          subprocess.check_call(['pip', 'install'] + deps)
+          "
 
       - name: Run pytest
         env:
