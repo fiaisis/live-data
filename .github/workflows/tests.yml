@@ -5,7 +5,7 @@ permissions:
   contents: read
 
 jobs:
-  find-image:
+  find-latest-fia-mantid-image:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.set-tag.outputs.tag }}
@@ -19,7 +19,7 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
   pytest:
-    needs: find-image
+    needs: find-latest-fia-mantid-image
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/fiaisis/mantid:${{ needs.find-image.outputs.tag }}
@@ -58,6 +58,11 @@ jobs:
         env:
           PYTHONPATH: .
         run: pytest test/ --random-order --random-order-bucket=global --cov --cov-report=xml
+
+      - name: Install system dependencies for Codecov
+        run: |
+          apt-get update
+          apt-get install -y curl gnupg
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
