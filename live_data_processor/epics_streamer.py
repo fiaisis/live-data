@@ -44,7 +44,8 @@ from epics import PV, caget
 
 from live_data_processor.exceptions import SampleLogError
 
-logger = logging.getLogger(__name__)
+INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
+internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
 
 # EPICS configuration (must be set before any EPICS calls)
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
@@ -177,16 +178,18 @@ def _process_entrypoint(file_path: str, stop_event: "mp.Event", wait_timeout: fl
         with Path(file_path).open("w", encoding="utf-8"):
             pass
     except Exception as exc:
-        logger.exception("Failed to clear epics logs file, reduction is ruined.")
+        internal_logger.exception("Failed to clear epics logs file, reduction is ruined.")
         raise SampleLogError("Failed to clear the epics logs file, reduction is ruined.") from exc
 
     try:
         pv_map = init_pvs(event_queue=event_queue, wait_timeout=wait_timeout)
         if not pv_map:
-            logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+            internal_logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
             raise SampleLogError("No PVs were discovered, therefore no epics values will be streamed.")
     except Exception as exc:
-        logger.critical("Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+        internal_logger.critical(
+            "Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless"
+        )
         raise SampleLogError("Failed to discover any PVs, therefore no epics values will be streamed.") from exc
 
     # Use a local loop; do not spawn extra threads in the child process for simplicity
