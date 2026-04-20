@@ -9,10 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  find-image:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - id: set-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch the most recent tag
+          TAG=$(gh api /orgs/fiaisis/packages/container/mantid/versions --jq '.[0].metadata.container.tags[0]')
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
   pytest:
+    needs: find-image
     runs-on: ubuntu-latest
     container:
-      image: "ghcr.io/fiaisis/mantid:latest"
+      image: ghcr.io/fiaisis/mantid:${{ needs.find-image.outputs.tag }}
     steps:
       - name: Checkout project
         uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493 # v4.1.7
