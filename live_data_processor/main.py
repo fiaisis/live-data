@@ -273,7 +273,9 @@ def start_live_reduction(  # noqa: C901
             "Run began at %s",
             datetime_from_record_timestamp(current_run_start.StartTime()),
         )
-        internal_logger.info("Starting live data reduction loop")
+        internal_logger.info(
+            "Starting live data reduction loop, script will execute every %s seconds", SCRIPT_EXECUTION_INTERVAL
+        )
 
         # Reset per-run timers
         script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
