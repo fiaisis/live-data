@@ -1,3 +1,8 @@
+*.nxs
+reduction_script.py
+*_log.txt
+mask_*.xml
+WV_*.txt
 
 */redpanda-quickstart/
 .idea

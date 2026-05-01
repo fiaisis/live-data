@@ -1,0 +1,70 @@
+---
+on: push
+
+permissions:
+  contents: read
+
+jobs:
+  find-latest-fia-mantid-image:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - id: set-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch the most recent tag
+          TAG=$(gh api /orgs/fiaisis/packages/container/mantid/versions --jq '.[0].metadata.container.tags[0]')
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+  pytest:
+    needs: find-latest-fia-mantid-image
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/fiaisis/mantid:${{ needs.find-latest-fia-mantid-image.outputs.tag }}
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493 # v4.1.7
+
+      - name: Set up cache for Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        # We need to install both sets of dependencies to test both
+        run: |
+          python -m pip install --upgrade pip
+
+          python -c "
+          import tomllib, subprocess
+          
+          deps = []
+          for p in ['live_data_processor/pyproject.toml', 'live_data_operator/pyproject.toml']:
+              with open(p, 'rb') as f:
+                  data = tomllib.load(f)
+                  deps.extend(data['project']['dependencies'])
+                  deps.extend(data['project'].get('optional-dependencies', {}).get('test', []))
+          
+          print('Installing dependencies:', deps)
+          subprocess.check_call(['pip', 'install'] + deps)
+          "
+
+      - name: Run pytest
+        env:
+          PYTHONPATH: .
+        run: pytest test/ --random-order --random-order-bucket=global --cov --cov-report=xml
+
+      - name: Install system dependencies for Codecov
+        run: |
+          apt-get update
+          apt-get install -y curl gnupg
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}

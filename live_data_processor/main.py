@@ -8,18 +8,15 @@ near real-time for a selected instrument.
 
 import contextlib
 import datetime
-import logging
 import os
 import signal
 import sys
 import time
-import traceback
 from collections.abc import Callable
 from pathlib import Path
 from types import FrameType
 from typing import Any
 
-import redis
 from kafka import KafkaConsumer
 from mantid import ConfigService
 from mantid.api import mtd
@@ -41,34 +38,33 @@ from live_data_processor.kafka_io import (
     seek_event_consumer_to_runstart,
     setup_consumers,
 )
+from live_data_processor.loggers import VALKEY_CLIENT, capture_and_tee, setup_loggers
 from live_data_processor.scripts import (
     get_reduction_function,
     refresh_reduction_function,
 )
 from live_data_processor.workspaces import initialize_instrument_workspace
 
-stdout_handler = logging.StreamHandler(stream=sys.stdout)
-logging.basicConfig(
-    handlers=[stdout_handler],
-    format="[%(asctime)s]-%(name)s-%(levelname)s: %(message)s",
-    level=logging.INFO,
-)
+# setup internal and external loggers.
+# The external logger will store it's output to valkey to be streamed to the frontend
+# If you do not want a log to be visible to a user, use the internal_logger
+INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
+internal_logger, external_logger, stream_key = setup_loggers(INSTRUMENT)
+
+
+# Silence noisy mantid
 ConfigService.setLogLevel(3)
-# ConfigService.appendDataSearchDir("~/work/live-data")  # noqa: ERA001
-logger = logging.getLogger(__name__)
-UTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "/output")
+
+OUTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "/output")
 KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
 KAFKA_PORT: int = int(os.environ.get("KAFKA_PORT", "31092"))
-INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
+
 SCRIPT_UPDATE_INTERVAL: int = int(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
 SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(60)))
 RUN_CHECK_INTERVAL: float = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
 LIVE_WS_NAME: str = os.environ.get("LIVE_WS", "lives")
 GITHUB_API_TOKEN: str = os.environ.get("GITHUB_API_TOKEN", "shh")
-VALKEY_HOST: str = os.environ.get("VALKEY_HOST", "localhost")
-VALKEY_PORT: int = int(os.environ.get("VALKEY_PORT", "6379"))
 
-valkey_client = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
 os.environ["EPICS_CA_ADDR_LIST"] = "130.246.39.152:5066"
@@ -118,7 +114,7 @@ def _shutdown(signum: int, frame: FrameType | None) -> None:
     :return: None
     """
 
-    logger.info("Signal %s received, shutting down live data…", signum)
+    internal_logger.info("Signal %s received, shutting down live data…", signum)
     sys.exit(0)
 
 
@@ -142,10 +138,10 @@ def initialize_run(
     :return: The RunStart message that was resolved and used to initialize the run.
     :raises TopicIncompleteError: If no RunStart message can be found on runInfo.
     """
-    logger.info("Initializing run: %s", str(run_start))
+    external_logger.info("Initializing run: %s", str(run_start))
 
     if run_start is None:
-        logger.info("Run Start is None")
+        external_logger.info("Run Start is None")
         run_start = find_latest_run_start(runinfo_consumer, INSTRUMENT)
         if run_start is None:
             raise TopicIncompleteError("No RunStart found in runInfo")
@@ -181,7 +177,7 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
             )
 
 
-def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
+def start_live_reduction(  # noqa: C901
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     kafka_sample_log_streaming: bool = False,
@@ -225,14 +221,17 @@ def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
                 streaming_kafka_sample_log=kafka_sample_log_streaming,
             )
         except (TopicIncompleteError, OffsetNotFoundError) as ex:
-            logger.warning("Could not initialize run: %s. Retrying in %s seconds...", ex, RUN_CHECK_INTERVAL)
+            external_logger.warning("No run could be found. Retrying in %s seconds...", RUN_CHECK_INTERVAL)
+            internal_logger.warning("Could not initialize run: %s. Retrying in %s seconds...", ex, RUN_CHECK_INTERVAL)
             time.sleep(RUN_CHECK_INTERVAL)
             continue
-        logger.info(
+        external_logger.info(
             "Run began at %s",
             datetime_from_record_timestamp(current_run_start.StartTime()),
         )
-        logger.info("Starting live data reduction loop")
+        internal_logger.info(
+            "Starting live data reduction loop, script will execute every %s seconds", SCRIPT_EXECUTION_INTERVAL
+        )
 
         # Reset per-run timers
         script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
@@ -266,19 +265,15 @@ def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
                         ws = mtd[LIVE_WS_NAME]
                         RemoveWorkspaceHistory(ws)
 
-                    logger.info("Executing reduction script")
-                    reduction_function()
-                    logger.info("Reduction script executed")
+                    external_logger.info("Executing reduction script")
+                    with capture_and_tee(external_logger):
+                        reduction_function()
+                    external_logger.info("Reduction script executed")
                 except Exception as exc:
-                    logger.warning("Error occurred in reduction", exc_info=exc)
-                    try:
-                        tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-                        valkey_client.set(f"live_data:{INSTRUMENT}:traceback", tb_str)
-                    except Exception as redis_exc:
-                        logger.warning("Failed to store traceback in Valkey", exc_info=redis_exc)
+                    external_logger.warning("Error occurred in reduction", exc_info=exc)
                 finally:
                     script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
-                    logger.info(
+                    external_logger.info(
                         "Script will execute again in %s seconds",
                         SCRIPT_EXECUTION_INTERVAL,
                     )
@@ -288,7 +283,7 @@ def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
                 latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
                 if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
-                    logger.info(
+                    external_logger.info(
                         "New run detected: RunStart message at %s",
                         datetime_from_record_timestamp(latest_runstart.StartTime()),
                     )
@@ -319,6 +314,9 @@ def main() -> None:
     :return: None
     """
     ##################
+    # Clear previous logs from cache
+    VALKEY_CLIENT.delete(stream_key)
+    external_logger.info("Starting live data processing for %s", INSTRUMENT)
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 

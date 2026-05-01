@@ -17,7 +17,9 @@ from streaming_data_types.fbschemas.run_stop_6s4t.RunStop import RunStop
 
 from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteError
 
-logger = logging.getLogger(__name__)
+INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
+internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
+external_logger = logging.getLogger(f"external_{INSTRUMENT}")
 
 KAFKA_IP = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
 KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
@@ -43,6 +45,7 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     :return: The latest RunStart message if found, None otherwise.
     :raises TopicIncompleteError: If the topic does not have any messages.
     """
+    external_logger.info("Attempting to find the latest run start...")
     latest_start = None
 
     # Set the offset to 3 messages from the end.
@@ -72,7 +75,8 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
             else "Unknown message (Not run start or run stop)"
             for message in messages
         ]
-        logger.warning("No run start found in runinfo topic. Messages: %s", messages)
+        internal_logger.warning("No run start found in runinfo topic. Messages: %s", messages)
+        external_logger.warning("No run start could be found.")
     return latest_start
 
 
@@ -91,7 +95,7 @@ def seek_event_consumer_to_runstart(
 
     run_start_ms = run_start.StartTime()
     timestamp = datetime_from_record_timestamp(run_start_ms)
-    logger.info("Seeking event consumer to run start: %s", timestamp)
+    external_logger.info("Seeking event consumer to run start: %s", timestamp)
     topics = (
         [f"{instrument}_events", f"{instrument}_sampleEnv"] if streaming_kafka_sample_log else [f"{instrument}_events"]
     )
@@ -100,7 +104,7 @@ def seek_event_consumer_to_runstart(
         tp = TopicPartition(topic, 0)
         offset_info = events_consumer.offsets_for_times({tp: run_start_ms})[tp]
         if offset_info is None or offset_info.offset is None:
-            logger.warning(
+            external_logger.warning(
                 "There are no events at the offset time for %s. Is the instrument waiting? See: "
                 "https://isiscomputinggroup.github.io/WebDashboard/instruments",
                 topic,

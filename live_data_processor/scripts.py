@@ -8,7 +8,10 @@ from pathlib import Path
 
 import requests
 
-logger = logging.getLogger(__name__)
+INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
+internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
+external_logger = logging.getLogger(f"external_{INSTRUMENT}")
+
 FIA_API_URL = os.environ.get("FIA_API_URL", "https://dev.reduce.isis.cclrc.ac.uk/api")
 REDUCTION_SCRIPT_PATH = Path("reduction_script.py")
 
@@ -63,14 +66,15 @@ def refresh_reduction_function(reduction_function, instrument: str) -> Callable[
     :param instrument: The instrument name
     :return: The new reduction function if there is one, otherwise the existing one
     """
-    logger.info("Checking for updated script...")
+    external_logger.info("Checking for updated script...")
     try:
         new_reduction_function = get_reduction_function(instrument)
         if inspect.getsource(new_reduction_function) != inspect.getsource(reduction_function):
-            logger.info("New Script detected, Continuing with new script")
+            external_logger.info("New Script detected, Continuing with new script")
             reduction_function = new_reduction_function
         else:
-            logger.info("No updates continuing with current script")
+            external_logger.info("No updates continuing with current script")
     except RuntimeError as exc:
-        logger.warning("Could not get latest script, continuing with current script", exc_info=exc)
+        external_logger.warning("Could not get the latest script")
+        internal_logger.warning("Reason:", exc_info=exc)
     return reduction_function
