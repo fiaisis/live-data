@@ -54,7 +54,6 @@ internal_logger, external_logger, stream_key = setup_loggers(INSTRUMENT)
 
 # Silence noisy mantid
 ConfigService.setLogLevel(3)
-# ConfigService.appendDataSearchDir("~/work/live-data")  # noqa: ERA001
 
 OUTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "/output")
 KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
