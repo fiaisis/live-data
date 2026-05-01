@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -5,6 +6,19 @@ from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 
 from live_data_processor.exceptions import TopicIncompleteError
 from live_data_processor.main import initialize_run
+
+# clear to prevent redis conn
+logging.getLogger("EXTERNAL").handlers.clear()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def main_mocks():
+    with (
+        patch("live_data_processor.main.VALKEY_CLIENT"),
+        patch("live_data_processor.main.external_logger"),
+        patch("live_data_processor.main.internal_logger"),
+    ):
+        yield
 
 
 @patch("live_data_processor.main.seek_event_consumer_to_runstart")
