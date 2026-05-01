@@ -8,7 +8,6 @@ near real-time for a selected instrument.
 
 import contextlib
 import datetime
-import io
 import os
 import signal
 import sys
@@ -51,7 +50,7 @@ from live_data_processor.workspaces import initialize_instrument_workspace
 # If you do not want a log to be visible to a user, use the internal_logger
 INSTRUMENT: str = os.environ.get("INSTRUMENT", "MERLIN").upper()
 internal_logger, external_logger, stream_key = setup_loggers(INSTRUMENT)
-VALKEY_CLIENT.delete(stream_key)
+
 
 # Silence noisy mantid
 ConfigService.setLogLevel(3)
@@ -81,48 +80,6 @@ kafka_config: dict[str, object] = {
     "security_protocol": "PLAINTEXT",
     "api_version_auto_timeout_ms": 60000,
 }
-
-
-class TeeStream(io.TextIOBase):
-    """
-    Stream wrapper that duplicates output to two text streams.
-
-    This class simulates a text stream and takes any writes and flushes,
-    piping the result uniformly to both provided destination streams.
-    """
-
-    def __init__(self, stream1: Any, stream2: Any) -> None:
-        """
-        Initialize the TeeStream with two target streams.
-
-        :param stream1: The primary stream to duplicate output to (e.g. sys.stdout).
-        :param stream2: The secondary stream to duplicate output to (e.g. io.StringIO).
-        """
-        super().__init__()
-        self.stream1 = stream1
-        self.stream2 = stream2
-
-    def write(self, data: str) -> int:
-        """
-        Write the string data to both output streams.
-
-        :param data: The string data to write out.
-        :return: The number of characters written.
-        """
-        self.stream1.write(data)
-        self.stream2.write(data)
-        return len(data)
-
-    def flush(self) -> None:
-        """Flush the output buffers of both underlying streams."""
-        self.stream1.flush()
-        self.stream2.flush()
-
-    def __getattr__(self, name: str) -> Any:
-        """
-        Delegate remaining unfound stream properties or methods to the primary stream.
-        """
-        return getattr(self.stream1, name)
 
 
 def process_events(events: EventMessage) -> None:
@@ -358,6 +315,8 @@ def main() -> None:
     :return: None
     """
     ##################
+    # Clear previous logs from cache
+    VALKEY_CLIENT.delete(stream_key)
     external_logger.info("Starting live data processing for %s", INSTRUMENT)
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
