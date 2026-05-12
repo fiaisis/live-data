@@ -1,9 +1,9 @@
 name: Build and Push Docker Images
 
 on:
-  push:
-    branches:
-      - main
+#  push:
+#    branches:
+#      - main
 
 
 env:
