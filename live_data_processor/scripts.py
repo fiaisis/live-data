@@ -1,5 +1,4 @@
 import importlib
-import inspect
 import logging
 import os
 from collections.abc import Callable
@@ -8,9 +7,7 @@ from pathlib import Path
 
 import requests
 
-INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
-internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
-external_logger = logging.getLogger(f"external_{INSTRUMENT}")
+INSTRUMENT = os.environ.get("INSTRUMENT", "MERLIN").upper()
 
 FIA_API_URL = os.environ.get("FIA_API_URL", "https://dev.reduce.isis.cclrc.ac.uk/api")
 REDUCTION_SCRIPT_PATH = Path("reduction_script.py")
@@ -22,7 +19,6 @@ def get_script(instrument: str) -> str | None:
 
     :returns: The content of the live data processing script as a string.
     """
-
     response = requests.get(f"{FIA_API_URL}/live-data/{instrument.lower()}/script", timeout=5)
     return response.json() if response.status_code == HTTPStatus.OK else None
 
@@ -38,27 +34,26 @@ def write_reduction_script(script: str) -> None:
         fle.write(script)
 
 
-def get_reduction_function(instrument: str) -> Callable[[], None]:
+def get_initial_reduction_function(instrument: str) -> Callable[[], None]:
     """
-    Given an instrument, return the reduction function for that instrument
+    Given an instrument, fetch the initial reduction script and return the execution function.
+    Called once at startup.
 
     :param instrument: The instrument name
     :return: The reduction function
     """
-
-    try:
-        import reduction_script
-    except ImportError:
-        initialize_script = get_script(os.environ["INSTRUMENT"].lower())
-        write_reduction_script(initialize_script)
-        import reduction_script
     latest_script = get_script(instrument)
-    write_reduction_script(latest_script)
-    importlib.reload(reduction_script)
+
+    # Write the script if we successfully fetched it
+    if latest_script:
+        write_reduction_script(latest_script)
+
+    import reduction_script
+
     return reduction_script.execute
 
 
-def refresh_reduction_function(reduction_function, instrument: str) -> Callable[[], None]:
+def refresh_reduction_function(reduction_function: Callable[[], None], instrument: str) -> Callable[[], None]:
     """
     Given the existing reduction function, check if there is a new script and return the new function if there is.
 
@@ -66,15 +61,40 @@ def refresh_reduction_function(reduction_function, instrument: str) -> Callable[
     :param instrument: The instrument name
     :return: The new reduction function if there is one, otherwise the existing one
     """
+    # Grab the loggers dynamically to avoid import-order and environment variable bugs
+    external_logger = logging.getLogger(f"external_{instrument}")
+    internal_logger = logging.getLogger(f"internal_{instrument}")
+
     external_logger.info("Checking for updated script...")
     try:
-        new_reduction_function = get_reduction_function(instrument)
-        if inspect.getsource(new_reduction_function) != inspect.getsource(reduction_function):
-            external_logger.info("New Script detected, Continuing with new script")
-            reduction_function = new_reduction_function
-        else:
-            external_logger.info("No updates continuing with current script")
-    except RuntimeError as exc:
+        latest_script = get_script(instrument)
+        if not latest_script:
+            external_logger.warning("Failed to fetch script from API. Keeping current script.")
+            return reduction_function
+
+        # Read the current script from disk as a string
+        current_script = ""
+        if REDUCTION_SCRIPT_PATH.exists():
+            with REDUCTION_SCRIPT_PATH.open("r") as f:
+                current_script = f.read()
+
+        # Compare raw strings instead of inspect.getsource() to avoid  caching bugs
+        if latest_script != current_script:
+            external_logger.info("New Script detected! Writing to disk and reloading...")
+
+            write_reduction_script(latest_script)
+
+            import reduction_script
+
+            importlib.reload(reduction_script)
+
+            return reduction_script.execute
+
+        external_logger.info("No updates continuing with current script")
+        return reduction_function
+
+    except Exception as exc:
         external_logger.warning("Could not get the latest script")
         internal_logger.warning("Reason:", exc_info=exc)
+
     return reduction_function

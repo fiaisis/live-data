@@ -21,7 +21,10 @@ from kafka import KafkaConsumer
 from mantid import ConfigService
 from mantid.api import mtd
 from mantid.kernel import DateAndTime
-from mantid.simpleapi import AddTimeSeriesLog, RemoveWorkspaceHistory
+from mantid.simpleapi import (
+    AddTimeSeriesLog,
+    RemoveWorkspaceHistory,
+)
 from streaming_data_types import deserialise_f144
 from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMessage
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
@@ -40,7 +43,7 @@ from live_data_processor.kafka_io import (
 )
 from live_data_processor.loggers import VALKEY_CLIENT, capture_and_tee, setup_loggers
 from live_data_processor.scripts import (
-    get_reduction_function,
+    get_initial_reduction_function,
     refresh_reduction_function,
 )
 from live_data_processor.workspaces import initialize_instrument_workspace
@@ -59,7 +62,7 @@ OUTPUT_DIR: str = os.environ.get("OUTPUT_DIR", "/output")
 KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
 KAFKA_PORT: int = int(os.environ.get("KAFKA_PORT", "31092"))
 
-SCRIPT_UPDATE_INTERVAL: int = int(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
+SCRIPT_UPDATE_INTERVAL: float = float(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
 SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(60)))
 RUN_CHECK_INTERVAL: float = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
 LIVE_WS_NAME: str = os.environ.get("LIVE_WS", "lives")
@@ -177,7 +180,7 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
             )
 
 
-def start_live_reduction(  # noqa: C901
+def start_live_reduction(  # noqa: C901, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     kafka_sample_log_streaming: bool = False,
@@ -210,7 +213,7 @@ def start_live_reduction(  # noqa: C901
     :return: None
     """
     current_run_start: RunStart | None = None
-    reduction_function: Callable[[], None] = get_reduction_function(INSTRUMENT)
+    reduction_function: Callable[[], None] = get_initial_reduction_function(INSTRUMENT)
 
     while True:
         try:
@@ -264,7 +267,7 @@ def start_live_reduction(  # noqa: C901
                                 )
                         ws = mtd[LIVE_WS_NAME]
                         RemoveWorkspaceHistory(ws)
-
+                    external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
                     external_logger.info("Executing reduction script")
                     with capture_and_tee(external_logger):
                         reduction_function()
