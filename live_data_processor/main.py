@@ -267,7 +267,7 @@ def start_live_reduction(  # noqa: C901
                                 )
                         ws = mtd[LIVE_WS_NAME]
                         RemoveWorkspaceHistory(ws)
-
+                    external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
                     external_logger.info("Executing reduction script")
                     with capture_and_tee(external_logger):
                         reduction_function()
