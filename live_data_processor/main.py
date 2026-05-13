@@ -9,14 +9,16 @@ near real-time for a selected instrument.
 import contextlib
 import datetime
 import os
+import queue
 import signal
-import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from types import FrameType
 from typing import Any
 
+import numpy as np
 from kafka import KafkaConsumer
 from mantid import ConfigService
 from mantid.api import mtd
@@ -83,25 +85,40 @@ kafka_config: dict[str, object] = {
     "api_version_auto_timeout_ms": 60000,
 }
 
+shutdown_event = threading.Event()
+
 
 def process_events(events: EventMessage) -> None:
-    """
-    Process event data by adding events to the live workspace.
-
-    This function extracts time-of-flight, detector IDs, and pulse time from the event message,
-    and adds each event to the appropriate spectrum in the live workspace.
-
-    :param events: The EventMessage containing neutron event data.
-    :return: None
-    """
-    times_of_flight = events.TimeOfFlightAsNumpy()
+    # 1. Vectorize the math: Perform the division on the whole array in C
+    times_of_flight = events.TimeOfFlightAsNumpy() / 1000.0
     detector_ids = events.DetectorIdAsNumpy()
     pulse_time = DateAndTime(events.PulseTime())
     ws = mtd[LIVE_WS_NAME]
-    if len(times_of_flight) > 0:
-        for detector_id, tof in zip(detector_ids, times_of_flight, strict=False):
-            spectra = ws.getSpectrum(int(detector_id))
-            spectra.addEventQuickly(tof / 1000.0, pulse_time)
+
+    if len(times_of_flight) == 0:
+        return
+
+    # 2. Sort both arrays based on detector ID (Fast C-level sort)
+    sort_indices = np.argsort(detector_ids)
+    sorted_det_ids = detector_ids[sort_indices]
+    sorted_tofs = times_of_flight[sort_indices]
+
+    # 3. Find unique detectors and where they split in the array
+    unique_dets, split_indices = np.unique(sorted_det_ids, return_index=True)
+
+    # 4. Split the TOFs into chunks per detector
+    # (split_indices[1:] because we don't need the 0 index for np.split)
+    tof_chunks = np.split(sorted_tofs, split_indices[1:])
+
+    # 5. Iterate over unique detectors (Massive reduction in loop size)
+    for det_id, tofs in zip(unique_dets, tof_chunks, strict=False):
+        # We now only fetch the spectrum ONCE per detector!
+        spectra = ws.getSpectrum(int(det_id))
+
+        # Add events (some Mantid versions support a vectorized add, if not,
+        # this inner loop is still vastly faster because the spectrum lookup is cached)
+        for tof in tofs:
+            spectra.addEventQuickly(tof, pulse_time)
 
 
 def _shutdown(signum: int, frame: FrameType | None) -> None:
@@ -109,16 +126,15 @@ def _shutdown(signum: int, frame: FrameType | None) -> None:
     Handle system signals for clean termination of live data processing.
 
     This function is triggered when a system signal (e.g., SIGTERM or SIGINT)
-    is received. It ensures a clean shutdown by stopping all active
-    Mantid live data processing algorithms and exiting the program.
+    is received. It ensures a clean shutdown by setting the global shutdown event.
 
     :param signum: The signal number that triggered the function (e.g., SIGTERM, SIGINT).
     :param frame: The current stack frame (unused in this function but required by the signal handler).
     :return: None
     """
 
-    internal_logger.info("Signal %s received, shutting down live data…", signum)
-    sys.exit(0)
+    internal_logger.info("Signal %s received, initiating graceful shutdown…", signum)
+    shutdown_event.set()
 
 
 def initialize_run(
@@ -180,9 +196,52 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
             )
 
 
+def run_monitor_thread(
+    instrument: str,
+    kafka_config: dict[str, object],
+    run_signal_queue: queue.Queue,
+    shutdown_event: threading.Event,
+) -> None:
+    """
+    Background thread that continuously monitors the runInfo topic for new runs.
+    Pushes new RunStart messages to the provided thread-safe queue.
+    """
+    # Python KafkaConsumers are not thread-safe, so we instantiate a dedicated consumer
+    consumer_config = kafka_config.copy()
+    consumer_config["consumer_timeout_ms"] = 1000  # Allow loop to check shutdown_event
+
+    topic_name = f"{instrument}_runInfo"
+    consumer = KafkaConsumer(topic_name, **consumer_config)
+
+    current_run_name = None
+
+    try:
+        while not shutdown_event.is_set():
+            for message in consumer:
+                if shutdown_event.is_set():
+                    break
+
+                schema = get_schema(message.value)
+                if schema == "pl72":
+                    run_start = RunStart.GetRootAsRunStart(message.value, 0)
+                    run_name = run_start.RunName()
+                    if isinstance(run_name, bytes):
+                        run_name = run_name.decode("utf-8")
+
+                    if current_run_name != run_name:
+                        current_run_name = run_name
+                        run_signal_queue.put(run_start)
+    except Exception as e:
+        internal_logger.error("Error in run monitor thread: %s", e)
+    finally:
+        consumer.close()
+        internal_logger.info("Run monitor thread shut down cleanly.")
+
+
 def start_live_reduction(  # noqa: C901, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
+    run_signal_queue: queue.Queue,
     kafka_sample_log_streaming: bool = False,
     epics_proc=None,
     epics_stop_event=None,
@@ -215,7 +274,7 @@ def start_live_reduction(  # noqa: C901, PLR0915
     current_run_start: RunStart | None = None
     reduction_function: Callable[[], None] = get_initial_reduction_function(INSTRUMENT)
 
-    while True:
+    while not shutdown_event.is_set():
         try:
             current_run_start = initialize_run(
                 events_consumer,
@@ -239,10 +298,13 @@ def start_live_reduction(  # noqa: C901, PLR0915
         # Reset per-run timers
         script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
         script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
-        run_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
+        # Note: run_last_checked_time has been removed
 
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
+            if shutdown_event.is_set():
+                break
+
             process_message(message, kafka_sample_streaming=kafka_sample_log_streaming)
 
             now = datetime.datetime.now(tz=datetime.UTC)
@@ -281,26 +343,23 @@ def start_live_reduction(  # noqa: C901, PLR0915
                         SCRIPT_EXECUTION_INTERVAL,
                     )
 
-            # Check for new run
-            now = datetime.datetime.now(tz=datetime.UTC)
-            if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
-                latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
-                if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
-                    external_logger.info(
-                        "New run detected: RunStart message at %s",
-                        datetime_from_record_timestamp(latest_runstart.StartTime()),
-                    )
+            # Check for new run via non-blocking queue check
+            try:
+                latest_runstart = run_signal_queue.get_nowait()
 
-                    if not kafka_sample_log_streaming:
-                        epics_proc, epics_stop_event = restart_epics_streaming(
-                            epics_log_file, epics_proc, epics_stop_event
-                        )
+                external_logger.info(
+                    "New run detected: RunStart message at %s",
+                    datetime_from_record_timestamp(latest_runstart.StartTime()),
+                )
 
-                    # Switch run_start and break out to reinitialize in-place
-                    current_run_start = latest_runstart
-                    break
+                if not kafka_sample_log_streaming:
+                    epics_proc, epics_stop_event = restart_epics_streaming(epics_log_file, epics_proc, epics_stop_event)
 
-                run_last_checked_time = now
+                # Switch run_start and break out to reinitialize in-place
+                current_run_start = latest_runstart
+                break
+            except queue.Empty:
+                pass
 
         # If the consumer loop ends (rare), just re-enter the while-loop and attempt to reinitialize.
         current_run_start = None
@@ -341,10 +400,18 @@ def main() -> None:
     else:
         epics_proc, epics_stop_event = None, None
 
+    # Start the Background Run Monitor Thread
+    run_signal_queue = queue.Queue()
+    monitor_thread = threading.Thread(
+        target=run_monitor_thread, args=(INSTRUMENT, kafka_config, run_signal_queue, shutdown_event), daemon=True
+    )
+    monitor_thread.start()
+
     try:
         start_live_reduction(
             events_consumer,
             runinfo_consumer,
+            run_signal_queue,
             kafka_sample_log_streaming=kafka_sample_streaming,
             epics_proc=epics_proc,
             epics_stop_event=epics_stop_event,
@@ -352,6 +419,16 @@ def main() -> None:
         )
 
     finally:
+        # Trigger shutdown for all threads
+        shutdown_event.set()
+
+        # Wait for background thread to exit
+        monitor_thread.join(timeout=5)
+
+        # Gracefully close Kafka Consumers
+        events_consumer.close()
+        runinfo_consumer.close()
+
         if not kafka_sample_streaming:
             # Clean shutdown of EPICS logging process
             epics_stop_event.set()
