@@ -65,7 +65,7 @@ KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
 KAFKA_PORT: int = int(os.environ.get("KAFKA_PORT", "31092"))
 
 SCRIPT_UPDATE_INTERVAL: float = float(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
-SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(60)))
+SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(300)))
 RUN_CHECK_INTERVAL: float = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
 LIVE_WS_NAME: str = os.environ.get("LIVE_WS", "lives")
 GITHUB_API_TOKEN: str = os.environ.get("GITHUB_API_TOKEN", "shh")
