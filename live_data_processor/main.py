@@ -18,11 +18,10 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-import numpy as np
 from kafka import KafkaConsumer
 from mantid import ConfigService
 from mantid.api import mtd
-from mantid.kernel import DateAndTime
+from mantid.kernel._kernel import DateAndTime
 from mantid.simpleapi import (
     AddTimeSeriesLog,
     RemoveWorkspaceHistory,
@@ -40,6 +39,7 @@ from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteE
 from live_data_processor.kafka_io import (
     datetime_from_record_timestamp,
     find_latest_run_start,
+    get_consumer_lag,
     seek_event_consumer_to_runstart,
     setup_consumers,
 )
@@ -88,37 +88,67 @@ kafka_config: dict[str, object] = {
 shutdown_event = threading.Event()
 
 
+def get_event_temporal_lag(events: EventMessage) -> float:
+    """
+    Calculate the temporal lag between the event pulse time and the current system time.
+
+    This function computes how far behind real-time the event data is by comparing
+    the pulse time embedded in the event message with the current system time.
+
+    :param events: The EventMessage containing event data with an embedded pulse timestamp.
+    :return: The lag in seconds (as a float) between the event pulse time and current time.
+    """
+
+    event_time_ns = events.PulseTime()
+    current_time_ns = time.time_ns()
+
+    # Convert delta to seconds
+    return (current_time_ns - event_time_ns) / 1e9
+
+
+LAST_LOG_TIME = 0.0
+LOG_COOLDOWN = 30.0
+CATCHUP_START_TIME = time.time()  # Start timing as soon as the script begins
+IS_CATCHING_UP = True  # Assume we start in a catch-up state
+
+
 def process_events(events: EventMessage) -> None:
-    # 1. Vectorize the math: Perform the division on the whole array in C
-    times_of_flight = events.TimeOfFlightAsNumpy() / 1000.0
+    global LAST_LOG_TIME, IS_CATCHING_UP, CATCHUP_START_TIME
+
+    raw_pulse_time_ns = events.PulseTime()
     detector_ids = events.DetectorIdAsNumpy()
-    pulse_time = DateAndTime(events.PulseTime())
-    ws = mtd[LIVE_WS_NAME]
+    times_of_flight = events.TimeOfFlightAsNumpy()
 
     if len(times_of_flight) == 0:
         return
 
-    # 2. Sort both arrays based on detector ID (Fast C-level sort)
-    sort_indices = np.argsort(detector_ids)
-    sorted_det_ids = detector_ids[sort_indices]
-    sorted_tofs = times_of_flight[sort_indices]
+    now = time.time()
+    event_time_seconds = raw_pulse_time_ns / 1e9
+    current_lag = now - event_time_seconds
 
-    # 3. Find unique detectors and where they split in the array
-    unique_dets, split_indices = np.unique(sorted_det_ids, return_index=True)
+    # --- Catch-up Tracking Logic ---
+    if IS_CATCHING_UP and current_lag <= 1.5:
+        # We were catching up, but now we are within 1.5 seconds of real-time
+        total_catchup_duration = now - CATCHUP_START_TIME
+        external_logger.info(f"*** Time taken to catch up was: {total_catchup_duration:.2f}s ***")
+        IS_CATCHING_UP = False
 
-    # 4. Split the TOFs into chunks per detector
-    # (split_indices[1:] because we don't need the 0 index for np.split)
-    tof_chunks = np.split(sorted_tofs, split_indices[1:])
-
-    # 5. Iterate over unique detectors (Massive reduction in loop size)
-    for det_id, tofs in zip(unique_dets, tof_chunks, strict=False):
-        # We now only fetch the spectrum ONCE per detector!
-        spectra = ws.getSpectrum(int(det_id))
-
-        # Add events (some Mantid versions support a vectorized add, if not,
-        # this inner loop is still vastly faster because the spectrum lookup is cached)
-        for tof in tofs:
-            spectra.addEventQuickly(tof, pulse_time)
+        # Standard throttled logging so you can still see progress
+    if now - LAST_LOG_TIME > LOG_COOLDOWN:
+        if current_lag > 1.5:
+            external_logger.info(f"Processing historical data: currently {current_lag:.1f}s behind real-time")
+        else:
+            # Subtle heartbeat so you know it's still alive
+            internal_logger.info("Operating in real-time.")
+        LAST_LOG_TIME = now
+    times_of_flight = events.TimeOfFlightAsNumpy()
+    detector_ids = events.DetectorIdAsNumpy()
+    pulse_time = DateAndTime(events.PulseTime())
+    ws = mtd[LIVE_WS_NAME]
+    if len(times_of_flight) > 0:
+        for detector_id, tof in zip(detector_ids, times_of_flight, strict=False):
+            spectra = ws.getSpectrum(int(detector_id))
+            spectra.addEventQuickly(tof / 1000.0, pulse_time)
 
 
 def _shutdown(signum: int, frame: FrameType | None) -> None:
@@ -301,11 +331,17 @@ def start_live_reduction(  # noqa: C901, PLR0915
         # Note: run_last_checked_time has been removed
 
         # Consume events until we detect a new run, then break to reinitialize.
+
         for message in events_consumer:
             if shutdown_event.is_set():
                 break
 
             process_message(message, kafka_sample_streaming=kafka_sample_log_streaming)
+            # Optional: Log lag every 1000 messages to avoid spamming the broker
+            if message.offset % 100000 == 0:
+                lags = get_consumer_lag(events_consumer)
+                total_lag = sum(lags.values())
+                internal_logger.info(f"Current Kafka Lag: {total_lag} messages")
 
             now = datetime.datetime.now(tz=datetime.UTC)
 
