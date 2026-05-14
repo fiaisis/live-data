@@ -139,7 +139,7 @@ def process_events(events: EventMessage) -> None:
             external_logger.info(f"Processing historical data: currently {current_lag:.1f}s behind real-time")
         else:
             # Subtle heartbeat so you know it's still alive
-            internal_logger.info("Operating in real-time.")
+            external_logger.info("Operating in real-time.")
         LAST_LOG_TIME = now
     times_of_flight = events.TimeOfFlightAsNumpy()
     detector_ids = events.DetectorIdAsNumpy()
