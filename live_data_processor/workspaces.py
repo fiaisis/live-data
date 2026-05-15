@@ -4,8 +4,12 @@ import os
 from pathlib import Path
 
 import numpy as np
-from mantid.api import mtd
-from mantid.simpleapi import AddSampleLog, GroupDetectors, LoadEmptyInstrument
+from mantid.api import AnalysisDataService, mtd
+from mantid.simpleapi import (
+    AddSampleLog,
+    GroupDetectors,
+    LoadEmptyInstrument,
+)
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 
 from live_data_processor.loggers import capture_and_tee
@@ -21,11 +25,15 @@ def initialize_instrument_workspace(instrument: str, workspace_name: str, run_st
     start of the new run, and loads an empty instrument workspace for the specified
     instrument. The workspace is configured to handle event data.
 
+    :param instrument: The name of the instrument to initialize the workspace for.
+    :param workspace_name: The name to assign to the newly created workspace.
     :param run_start: The RunStart message containing information about the new run.
     :return: None
     """
     external_logger = logging.getLogger(f"external_{INSTRUMENT}")
     external_logger.info("Initializing workspace for run")
+    AnalysisDataService.clear()
+
     with capture_and_tee(external_logger):
         LoadEmptyInstrument(InstrumentName=instrument, OutputWorkspace=workspace_name, MakeEventWorkspace=True)
         detector_ids = run_start.DetectorSpectrumMap().DetectorIdAsNumpy()
