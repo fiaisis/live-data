@@ -143,7 +143,8 @@ def process_events(events: EventMessage) -> None:
         LAST_LOG_TIME = now
     times_of_flight = events.TimeOfFlightAsNumpy()
     detector_ids = events.DetectorIdAsNumpy()
-    pulse_time = DateAndTime(events.PulseTime())
+    # pulse_time = DateAndTime(events.PulseTime())
+    pulse_time = DateAndTime(events.PulseTime() - 631152000000000000)
     ws = mtd[LIVE_WS_NAME]
     if len(times_of_flight) > 0:
         for detector_id, tof in zip(detector_ids, times_of_flight, strict=False):
