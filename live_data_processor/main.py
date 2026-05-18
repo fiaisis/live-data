@@ -85,6 +85,12 @@ kafka_config: dict[str, object] = {
     "api_version_auto_timeout_ms": 60000,
 }
 
+# mantid event data and is based on the epoch being 1990
+UNIX_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
+MANTID_EPOCH = datetime.datetime(1990, 1, 1, tzinfo=datetime.UTC)
+EPOCH_DIFFERENCE = MANTID_EPOCH - UNIX_EPOCH
+UNIX_TO_MANTID_OFFSET_NS = int(EPOCH_DIFFERENCE.total_seconds() * 1e9)
+
 shutdown_event = threading.Event()
 
 
@@ -116,7 +122,6 @@ def process_events(events: EventMessage) -> None:
     global LAST_LOG_TIME, IS_CATCHING_UP, CATCHUP_START_TIME
 
     raw_pulse_time_ns = events.PulseTime()
-    detector_ids = events.DetectorIdAsNumpy()
     times_of_flight = events.TimeOfFlightAsNumpy()
 
     if len(times_of_flight) == 0:
@@ -143,8 +148,7 @@ def process_events(events: EventMessage) -> None:
         LAST_LOG_TIME = now
     times_of_flight = events.TimeOfFlightAsNumpy()
     detector_ids = events.DetectorIdAsNumpy()
-    # pulse_time = DateAndTime(events.PulseTime())
-    pulse_time = DateAndTime(events.PulseTime() - 631152000000000000)
+    pulse_time = DateAndTime(events.PulseTime() - UNIX_TO_MANTID_OFFSET_NS)
     ws = mtd[LIVE_WS_NAME]
     if len(times_of_flight) > 0:
         for detector_id, tof in zip(detector_ids, times_of_flight, strict=False):
@@ -172,7 +176,6 @@ def initialize_run(
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     run_start: RunStart | None = None,
-    streaming_kafka_sample_log: bool = False,
 ) -> RunStart:
     """
     Initialize a run by finding the latest RunStart, preparing workspace, and seeking consumers.
@@ -184,7 +187,6 @@ def initialize_run(
     :param events_consumer: Kafka consumer subscribed to the <instrument>_events topic.
     :param runinfo_consumer: Kafka consumer for <instrument>_runInfo used to locate RunStart.
     :param run_start: Optional RunStart message to use; if None, the latest will be fetched.
-    :param streaming_kafka_sample_log: If True, sample log topic is also considered for seeking.
     :return: The RunStart message that was resolved and used to initialize the run.
     :raises TopicIncompleteError: If no RunStart message can be found on runInfo.
     """
@@ -269,7 +271,7 @@ def run_monitor_thread(
         internal_logger.info("Run monitor thread shut down cleanly.")
 
 
-def start_live_reduction(  # noqa: C901, PLR0915
+def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     run_signal_queue: queue.Queue,
@@ -311,7 +313,6 @@ def start_live_reduction(  # noqa: C901, PLR0915
                 events_consumer,
                 runinfo_consumer,
                 current_run_start,
-                streaming_kafka_sample_log=kafka_sample_log_streaming,
             )
         except (TopicIncompleteError, OffsetNotFoundError) as ex:
             external_logger.warning("No run could be found. Retrying in %s seconds...", RUN_CHECK_INTERVAL)
