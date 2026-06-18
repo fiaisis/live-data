@@ -116,10 +116,11 @@ LAST_LOG_TIME = 0.0
 LOG_COOLDOWN = 30.0
 CATCHUP_START_TIME = time.time()  # Start timing as soon as the script begins
 IS_CATCHING_UP = True  # Assume we start in a catch-up state
+REALTIME_LAG_THRESHOLD = 1.5
 
 
 def process_events(events: EventMessage) -> None:
-    global LAST_LOG_TIME, IS_CATCHING_UP, CATCHUP_START_TIME
+    global LAST_LOG_TIME, IS_CATCHING_UP  # noqa: PLW0603
 
     raw_pulse_time_ns = events.PulseTime()
     times_of_flight = events.TimeOfFlightAsNumpy()
@@ -132,7 +133,7 @@ def process_events(events: EventMessage) -> None:
     current_lag = now - event_time_seconds
 
     # --- Catch-up Tracking Logic ---
-    if IS_CATCHING_UP and current_lag <= 1.5:
+    if IS_CATCHING_UP and current_lag <= REALTIME_LAG_THRESHOLD:
         # We were catching up, but now we are within 1.5 seconds of real-time
         total_catchup_duration = now - CATCHUP_START_TIME
         external_logger.info(f"*** Time taken to catch up was: {total_catchup_duration:.2f}s ***")
@@ -140,7 +141,7 @@ def process_events(events: EventMessage) -> None:
 
         # Standard throttled logging so you can still see progress
     if now - LAST_LOG_TIME > LOG_COOLDOWN:
-        if current_lag > 1.5:
+        if current_lag > REALTIME_LAG_THRESHOLD:
             external_logger.info(f"Processing historical data: currently {current_lag:.1f}s behind real-time")
         else:
             # Subtle heartbeat so you know it's still alive
