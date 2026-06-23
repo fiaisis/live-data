@@ -9,5 +9,4 @@ WORKDIR /app/live_data_processor
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
-WORKDIR /app/live_data_processor
-ENTRYPOINT ["python", "main.py"]
+CMD ["python", "main.py"]
