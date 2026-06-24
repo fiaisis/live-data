@@ -31,11 +31,11 @@ import datetime
 import logging
 import os
 import queue
-import redis
 import time
 import zlib
 from typing import Any
 
+import redis
 from epics import PV, caget
 
 from live_data_processor.exceptions import SampleLogError
@@ -164,30 +164,31 @@ def main(wait_timeout: float = 1.0) -> None:
 
     # Use a local loop; do not spawn extra threads in the child process for simplicity
     while True:
-            try:
-                block_name, value, timestamp_ns = event_queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
+        try:
+            block_name, value, timestamp_ns = event_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
 
-            if value is None or value == "None":
-                continue
+        if value is None or value == "None":
+            continue
 
-            ts_str = _format_timestamp(timestamp_ns)
-            try:
-                VALKEY_CLIENT.xadd(
-                    STREAM_KEY,
-                    {
-                        "block_name": block_name,
-                        "value": str(value),
-                        "timestamp": ts_str,
-                    },
-                    maxlen=1000,  # Keep only the last 1000 entries
-                )
-            except redis.ConnectionError:
-                internal_logger.error("Lost connection to Valkey, Retrying...")
-                time.sleep(1)
-            except Exception as exc:
-                raise SampleLogError("Failed to write to Valkey stream.") from exc
+        ts_str = _format_timestamp(timestamp_ns)
+        try:
+            VALKEY_CLIENT.xadd(
+                STREAM_KEY,
+                {
+                    "block_name": block_name,
+                    "value": str(value),
+                    "timestamp": ts_str,
+                },
+                maxlen=1000,  # Keep only the last 1000 entries
+            )
+        except redis.ConnectionError:
+            internal_logger.error("Lost connection to Valkey, Retrying...")
+            time.sleep(1)
+        except Exception as exc:
+            raise SampleLogError("Failed to write to Valkey stream.") from exc
+
 
 if __name__ == "__main__":
     main()
