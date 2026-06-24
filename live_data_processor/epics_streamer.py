@@ -173,7 +173,6 @@ def main(wait_timeout: float = 1.0) -> None:
                 continue
 
             ts_str = _format_timestamp(timestamp_ns)
-            line = f"{block_name} - {value} - {ts_str}\n"
             try:
                 VALKEY_CLIENT.xadd(
                     STREAM_KEY,
