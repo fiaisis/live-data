@@ -72,14 +72,14 @@ def test_start_live_reduction_reads_valkey(
     """Test that start_live_reduction reads from Valkey when execution interval is reached."""
     from live_data_processor.main import start_live_reduction, VALKEY_CLIENT
     import datetime
-    
+
     mock_init_run.return_value = MagicMock(spec=RunStart)
-    
+
     # Mock events_consumer to yield exactly one message
     mock_events_consumer = MagicMock()
     mock_events_consumer.__iter__.return_value = [MagicMock()]
     mock_runinfo_consumer = MagicMock()
-    
+
     # Make find_latest_run_start return a new RunStart to break the main `while True` loop
     new_run_start = MagicMock(spec=RunStart)
     mock_find_latest.return_value = new_run_start
@@ -87,7 +87,14 @@ def test_start_live_reduction_reads_valkey(
     # Mock Valkey xrange to return some data
     VALKEY_CLIENT.xrange = MagicMock()
     VALKEY_CLIENT.xrange.return_value = [
-        ("123-0", {"block_name": "TestBlock", "value": "10.5", "timestamp": "2023-01-01T12:00:00Z"})
+        (
+            "123-0",
+            {
+                "block_name": "TestBlock",
+                "value": "10.5",
+                "timestamp": "2023-01-01T12:00:00Z",
+            },
+        )
     ]
 
     # Force datetime to trigger execution interval immediately
@@ -96,7 +103,7 @@ def test_start_live_reduction_reads_valkey(
         def now(cls, tz=None):
             # Return a time far in the future so that the interval > SCRIPT_EXECUTION_INTERVAL is True
             return datetime.datetime(2050, 1, 1, tzinfo=datetime.UTC)
-            
+
     with patch("live_data_processor.main.datetime.datetime", MockDatetime):
         # We need to catch the StopIteration or just let it break out of the while loop
         start_live_reduction(
@@ -117,4 +124,3 @@ def test_start_live_reduction_reads_valkey(
     # Verify the values were added to the workspace log
     mock_add.assert_called_once()
     mock_add.assert_called_with("lives", "TestBlock", "2023-01-01T12:00:00Z", "10.5")
-
