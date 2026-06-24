@@ -13,7 +13,6 @@ import signal
 import sys
 import time
 from collections.abc import Callable
-from pathlib import Path
 from types import FrameType
 from typing import Any
 
@@ -254,14 +253,14 @@ def start_live_reduction(  # noqa: C901, PLR0915
                     if not kafka_sample_log_streaming:
                         stream_key = f"instrument:{INSTRUMENT}:epics_stream"
 
-                        #Fetch all events currently in the stream
+                        # Fetch all events currently in the stream
                         events = VALKEY_CLIENT.xrange(stream_key, "-", "+")
 
                         for _, data in events:
                             source = data.get("block_name")
                             value = data.get("value")
                             timestamp = data.get("timestamp")
-                            
+
                             if source and value and timestamp:
                                 AddTimeSeriesLog(
                                     LIVE_WS_NAME,
@@ -269,7 +268,7 @@ def start_live_reduction(  # noqa: C901, PLR0915
                                     timestamp,
                                     value,
                                 )
-                        
+
                         ws = mtd[LIVE_WS_NAME]
                         RemoveWorkspaceHistory(ws)
                     external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
