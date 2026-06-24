@@ -30,10 +30,6 @@ from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMess
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 from streaming_data_types.utils import get_schema
 
-from live_data_processor.epics_streamer import (
-    restart_epics_streaming,
-    start_logging_process,
-)
 from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteError
 from live_data_processor.kafka_io import (
     datetime_from_record_timestamp,
@@ -256,15 +252,24 @@ def start_live_reduction(  # noqa: C901, PLR0915
             if (now - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
                 try:
                     if not kafka_sample_log_streaming:
-                        with Path(epics_log_file).open("r", encoding="utf-8") as f:
-                            for line in f:
-                                source, value, timestamp = line.split(" - ")
+                        stream_key = f"instrument:{INSTRUMENT}:epics_stream"
+
+                        #Fetch all events currently in the stream
+                        events = VALKEY_CLIENT.xrange(stream_key, "-", "+")
+
+                        for _, data in events:
+                            source = data.get("block_name")
+                            value = data.get("value")
+                            timestamp = data.get("timestamp")
+                            
+                            if source and value and timestamp:
                                 AddTimeSeriesLog(
                                     LIVE_WS_NAME,
                                     source,
                                     timestamp,
                                     value,
                                 )
+                        
                         ws = mtd[LIVE_WS_NAME]
                         RemoveWorkspaceHistory(ws)
                     external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
@@ -290,11 +295,6 @@ def start_live_reduction(  # noqa: C901, PLR0915
                         "New run detected: RunStart message at %s",
                         datetime_from_record_timestamp(latest_runstart.StartTime()),
                     )
-
-                    if not kafka_sample_log_streaming:
-                        epics_proc, epics_stop_event = restart_epics_streaming(
-                            epics_log_file, epics_proc, epics_stop_event
-                        )
 
                     # Switch run_start and break out to reinitialize in-place
                     current_run_start = latest_runstart
@@ -336,30 +336,16 @@ def main() -> None:
     events_consumer, runinfo_consumer = setup_consumers(INSTRUMENT, kafka_config)
     kafka_sample_streaming = False
 
-    if not kafka_sample_streaming:
-        epics_proc, epics_stop_event = start_logging_process(f"{INSTRUMENT.lower()}_log.txt")
-    else:
-        epics_proc, epics_stop_event = None, None
+    epics_proc, epics_stop_event = None, None
 
-    try:
-        start_live_reduction(
-            events_consumer,
-            runinfo_consumer,
-            kafka_sample_log_streaming=kafka_sample_streaming,
-            epics_proc=epics_proc,
-            epics_stop_event=epics_stop_event,
-            epics_log_file=f"{INSTRUMENT.lower()}_log.txt",
-        )
-
-    finally:
-        if not kafka_sample_streaming:
-            # Clean shutdown of EPICS logging process
-            epics_stop_event.set()
-            with contextlib.suppress(Exception):
-                epics_proc.join(timeout=5)
-                if epics_proc.is_alive():
-                    epics_proc.terminate()
-                    epics_proc.join(timeout=2)
+    start_live_reduction(
+        events_consumer,
+        runinfo_consumer,
+        kafka_sample_log_streaming=kafka_sample_streaming,
+        epics_proc=epics_proc,
+        epics_stop_event=epics_stop_event,
+        epics_log_file=f"{INSTRUMENT.lower()}_log.txt",
+    )
 
 
 if __name__ == "__main__":
