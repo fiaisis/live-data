@@ -56,6 +56,7 @@ def test_initialize_run_missing_start(mock_find):
 @patch("live_data_processor.main.initialize_run")
 @patch("live_data_processor.main.process_message")
 @patch("live_data_processor.main.refresh_reduction_function")
+@patch("live_data_processor.main.get_initial_reduction_function")
 @patch("live_data_processor.main.find_latest_run_start")
 @patch("live_data_processor.main.AddTimeSeriesLog")
 @patch("live_data_processor.main.RemoveWorkspaceHistory")
@@ -65,6 +66,7 @@ def test_start_live_reduction_reads_valkey(
     mock_remove,
     mock_add,
     mock_find_latest,
+    mock_get_initial,
     mock_refresh,
     mock_process,
     mock_init_run,
