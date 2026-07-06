@@ -9,8 +9,9 @@ near real-time for a selected instrument.
 import contextlib
 import datetime
 import os
+import queue
 import signal
-import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -20,7 +21,7 @@ from typing import Any
 from kafka import KafkaConsumer
 from mantid import ConfigService
 from mantid.api import mtd
-from mantid.kernel import DateAndTime
+from mantid.kernel._kernel import DateAndTime
 from mantid.simpleapi import (
     AddTimeSeriesLog,
     RemoveWorkspaceHistory,
@@ -38,6 +39,7 @@ from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteE
 from live_data_processor.kafka_io import (
     datetime_from_record_timestamp,
     find_latest_run_start,
+    get_consumer_lag,
     seek_event_consumer_to_runstart,
     setup_consumers,
 )
@@ -63,7 +65,7 @@ KAFKA_IP: str = os.environ.get("KAFKA_IP", "livedata.isis.cclrc.ac.uk")
 KAFKA_PORT: int = int(os.environ.get("KAFKA_PORT", "31092"))
 
 SCRIPT_UPDATE_INTERVAL: float = float(os.environ.get("SCRIPT_REFRESH_TIME", "30"))
-SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(60)))
+SCRIPT_EXECUTION_INTERVAL: float = float(os.environ.get("SCRIPT_RUN_INTERVAL", str(300)))
 RUN_CHECK_INTERVAL: float = float(os.environ.get("RUN_CHECK_INTERVAL", "3"))
 LIVE_WS_NAME: str = os.environ.get("LIVE_WS", "lives")
 GITHUB_API_TOKEN: str = os.environ.get("GITHUB_API_TOKEN", "shh")
@@ -83,20 +85,71 @@ kafka_config: dict[str, object] = {
     "api_version_auto_timeout_ms": 60000,
 }
 
+# mantid event data and is based on the epoch being 1990
+UNIX_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
+MANTID_EPOCH = datetime.datetime(1990, 1, 1, tzinfo=datetime.UTC)
+EPOCH_DIFFERENCE = MANTID_EPOCH - UNIX_EPOCH
+UNIX_TO_MANTID_OFFSET_NS = int(EPOCH_DIFFERENCE.total_seconds() * 1e9)
+
+shutdown_event = threading.Event()
+
+
+LAST_LOG_TIME = 0.0
+LOG_COOLDOWN = 30.0
+CATCHUP_START_TIME = time.time()  # Start timing as soon as the script begins
+IS_CATCHING_UP = True  # Assume we start in a catch-up state
+REALTIME_LAG_THRESHOLD = 1.5
+
+
+def get_event_temporal_lag(events: EventMessage) -> float:
+    """
+    Calculate the temporal lag between the event pulse time and the current system time.
+
+    This function computes how far behind real-time the event data is by comparing
+    the pulse time embedded in the event message with the current system time.
+
+    :param events: The EventMessage containing event data with an embedded pulse timestamp.
+    :return: The lag in seconds (as a float) between the event pulse time and current time.
+    """
+
+    event_time_ns = events.PulseTime()
+    current_time_ns = time.time_ns()
+
+    # Convert delta to seconds
+    return (current_time_ns - event_time_ns) / 1e9
+
 
 def process_events(events: EventMessage) -> None:
-    """
-    Process event data by adding events to the live workspace.
+    global LAST_LOG_TIME, IS_CATCHING_UP  # noqa: PLW0603
 
-    This function extracts time-of-flight, detector IDs, and pulse time from the event message,
-    and adds each event to the appropriate spectrum in the live workspace.
+    raw_pulse_time_ns = events.PulseTime()
+    times_of_flight = events.TimeOfFlightAsNumpy()
 
-    :param events: The EventMessage containing neutron event data.
-    :return: None
-    """
+    if len(times_of_flight) == 0:
+        return
+
+    now = time.time()
+    event_time_seconds = raw_pulse_time_ns / 1e9
+    current_lag = now - event_time_seconds
+
+    # --- Catch-up Tracking Logic ---
+    if IS_CATCHING_UP and current_lag <= REALTIME_LAG_THRESHOLD:
+        # We were catching up, but now we are within 1.5 seconds of real-time
+        total_catchup_duration = now - CATCHUP_START_TIME
+        external_logger.info(f"*** Time taken to catch up was: {total_catchup_duration:.2f}s ***")
+        IS_CATCHING_UP = False
+
+        # Standard throttled logging so you can still see progress
+    if now - LAST_LOG_TIME > LOG_COOLDOWN:
+        if current_lag > REALTIME_LAG_THRESHOLD:
+            external_logger.info(f"Processing historical data: currently {current_lag:.1f}s behind real-time")
+        else:
+            # Subtle heartbeat so you know it's still alive
+            external_logger.info("Operating in real-time.")
+        LAST_LOG_TIME = now
     times_of_flight = events.TimeOfFlightAsNumpy()
     detector_ids = events.DetectorIdAsNumpy()
-    pulse_time = DateAndTime(events.PulseTime())
+    pulse_time = DateAndTime(events.PulseTime() - UNIX_TO_MANTID_OFFSET_NS)
     ws = mtd[LIVE_WS_NAME]
     if len(times_of_flight) > 0:
         for detector_id, tof in zip(detector_ids, times_of_flight, strict=False):
@@ -109,23 +162,21 @@ def _shutdown(signum: int, frame: FrameType | None) -> None:
     Handle system signals for clean termination of live data processing.
 
     This function is triggered when a system signal (e.g., SIGTERM or SIGINT)
-    is received. It ensures a clean shutdown by stopping all active
-    Mantid live data processing algorithms and exiting the program.
+    is received. It ensures a clean shutdown by setting the global shutdown event.
 
     :param signum: The signal number that triggered the function (e.g., SIGTERM, SIGINT).
     :param frame: The current stack frame (unused in this function but required by the signal handler).
     :return: None
     """
 
-    internal_logger.info("Signal %s received, shutting down live data…", signum)
-    sys.exit(0)
+    internal_logger.info("Signal %s received, initiating graceful shutdown…", signum)
+    shutdown_event.set()
 
 
 def initialize_run(
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     run_start: RunStart | None = None,
-    streaming_kafka_sample_log: bool = False,
 ) -> RunStart:
     """
     Initialize a run by finding the latest RunStart, preparing workspace, and seeking consumers.
@@ -137,7 +188,6 @@ def initialize_run(
     :param events_consumer: Kafka consumer subscribed to the <instrument>_events topic.
     :param runinfo_consumer: Kafka consumer for <instrument>_runInfo used to locate RunStart.
     :param run_start: Optional RunStart message to use; if None, the latest will be fetched.
-    :param streaming_kafka_sample_log: If True, sample log topic is also considered for seeking.
     :return: The RunStart message that was resolved and used to initialize the run.
     :raises TopicIncompleteError: If no RunStart message can be found on runInfo.
     """
@@ -180,9 +230,52 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
             )
 
 
-def start_live_reduction(  # noqa: C901, PLR0915
+def run_monitor_thread(
+    instrument: str,
+    kafka_config: dict[str, object],
+    run_signal_queue: queue.Queue,
+    shutdown_event: threading.Event,
+) -> None:
+    """
+    Background thread that continuously monitors the runInfo topic for new runs.
+    Pushes new RunStart messages to the provided thread-safe queue.
+    """
+    # Python KafkaConsumers are not thread-safe, so we instantiate a dedicated consumer
+    consumer_config = kafka_config.copy()
+    consumer_config["consumer_timeout_ms"] = 1000  # Allow loop to check shutdown_event
+
+    topic_name = f"{instrument}_runInfo"
+    consumer = KafkaConsumer(topic_name, **consumer_config)
+
+    current_run_name = None
+
+    try:
+        while not shutdown_event.is_set():
+            for message in consumer:
+                if shutdown_event.is_set():
+                    break
+
+                schema = get_schema(message.value)
+                if schema == "pl72":
+                    run_start = RunStart.GetRootAsRunStart(message.value, 0)
+                    run_name = run_start.RunName()
+                    if isinstance(run_name, bytes):
+                        run_name = run_name.decode("utf-8")
+
+                    if current_run_name != run_name:
+                        current_run_name = run_name
+                        run_signal_queue.put(run_start)
+    except Exception as e:
+        internal_logger.error("Error in run monitor thread: %s", e)
+    finally:
+        consumer.close()
+        internal_logger.info("Run monitor thread shut down cleanly.")
+
+
+def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
+    run_signal_queue: queue.Queue,
     kafka_sample_log_streaming: bool = False,
     epics_proc=None,
     epics_stop_event=None,
@@ -215,13 +308,12 @@ def start_live_reduction(  # noqa: C901, PLR0915
     current_run_start: RunStart | None = None
     reduction_function: Callable[[], None] = get_initial_reduction_function(INSTRUMENT)
 
-    while True:
+    while not shutdown_event.is_set():
         try:
             current_run_start = initialize_run(
                 events_consumer,
                 runinfo_consumer,
                 current_run_start,
-                streaming_kafka_sample_log=kafka_sample_log_streaming,
             )
         except (TopicIncompleteError, OffsetNotFoundError) as ex:
             external_logger.warning("No run could be found. Retrying in %s seconds...", RUN_CHECK_INTERVAL)
@@ -239,11 +331,20 @@ def start_live_reduction(  # noqa: C901, PLR0915
         # Reset per-run timers
         script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
         script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
-        run_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
+        # Note: run_last_checked_time has been removed
 
         # Consume events until we detect a new run, then break to reinitialize.
+
         for message in events_consumer:
+            if shutdown_event.is_set():
+                break
+
             process_message(message, kafka_sample_streaming=kafka_sample_log_streaming)
+            # Optional: Log lag every 1000 messages to avoid spamming the broker
+            if message.offset % 100000 == 0:
+                lags = get_consumer_lag(events_consumer)
+                total_lag = sum(lags.values())
+                internal_logger.info(f"Current Kafka Lag: {total_lag} messages")
 
             now = datetime.datetime.now(tz=datetime.UTC)
 
@@ -281,26 +382,23 @@ def start_live_reduction(  # noqa: C901, PLR0915
                         SCRIPT_EXECUTION_INTERVAL,
                     )
 
-            # Check for new run
-            now = datetime.datetime.now(tz=datetime.UTC)
-            if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
-                latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
-                if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
-                    external_logger.info(
-                        "New run detected: RunStart message at %s",
-                        datetime_from_record_timestamp(latest_runstart.StartTime()),
-                    )
+            # Check for new run via non-blocking queue check
+            try:
+                latest_runstart = run_signal_queue.get_nowait()
 
-                    if not kafka_sample_log_streaming:
-                        epics_proc, epics_stop_event = restart_epics_streaming(
-                            epics_log_file, epics_proc, epics_stop_event
-                        )
+                external_logger.info(
+                    "New run detected: RunStart message at %s",
+                    datetime_from_record_timestamp(latest_runstart.StartTime()),
+                )
 
-                    # Switch run_start and break out to reinitialize in-place
-                    current_run_start = latest_runstart
-                    break
+                if not kafka_sample_log_streaming:
+                    epics_proc, epics_stop_event = restart_epics_streaming(epics_log_file, epics_proc, epics_stop_event)
 
-                run_last_checked_time = now
+                # Switch run_start and break out to reinitialize in-place
+                current_run_start = latest_runstart
+                break
+            except queue.Empty:
+                pass
 
         # If the consumer loop ends (rare), just re-enter the while-loop and attempt to reinitialize.
         current_run_start = None
@@ -341,10 +439,18 @@ def main() -> None:
     else:
         epics_proc, epics_stop_event = None, None
 
+    # Start the Background Run Monitor Thread
+    run_signal_queue = queue.Queue()
+    monitor_thread = threading.Thread(
+        target=run_monitor_thread, args=(INSTRUMENT, kafka_config, run_signal_queue, shutdown_event), daemon=True
+    )
+    monitor_thread.start()
+
     try:
         start_live_reduction(
             events_consumer,
             runinfo_consumer,
+            run_signal_queue,
             kafka_sample_log_streaming=kafka_sample_streaming,
             epics_proc=epics_proc,
             epics_stop_event=epics_stop_event,
@@ -352,6 +458,16 @@ def main() -> None:
         )
 
     finally:
+        # Trigger shutdown for all threads
+        shutdown_event.set()
+
+        # Wait for background thread to exit
+        monitor_thread.join(timeout=5)
+
+        # Gracefully close Kafka Consumers
+        events_consumer.close()
+        runinfo_consumer.close()
+
         if not kafka_sample_streaming:
             # Clean shutdown of EPICS logging process
             epics_stop_event.set()
