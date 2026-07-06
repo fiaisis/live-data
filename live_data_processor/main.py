@@ -94,6 +94,13 @@ UNIX_TO_MANTID_OFFSET_NS = int(EPOCH_DIFFERENCE.total_seconds() * 1e9)
 shutdown_event = threading.Event()
 
 
+LAST_LOG_TIME = 0.0
+LOG_COOLDOWN = 30.0
+CATCHUP_START_TIME = time.time()  # Start timing as soon as the script begins
+IS_CATCHING_UP = True  # Assume we start in a catch-up state
+REALTIME_LAG_THRESHOLD = 1.5
+
+
 def get_event_temporal_lag(events: EventMessage) -> float:
     """
     Calculate the temporal lag between the event pulse time and the current system time.
@@ -110,13 +117,6 @@ def get_event_temporal_lag(events: EventMessage) -> float:
 
     # Convert delta to seconds
     return (current_time_ns - event_time_ns) / 1e9
-
-
-LAST_LOG_TIME = 0.0
-LOG_COOLDOWN = 30.0
-CATCHUP_START_TIME = time.time()  # Start timing as soon as the script begins
-IS_CATCHING_UP = True  # Assume we start in a catch-up state
-REALTIME_LAG_THRESHOLD = 1.5
 
 
 def process_events(events: EventMessage) -> None:
