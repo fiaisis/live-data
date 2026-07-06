@@ -101,12 +101,21 @@ def test_start_live_reduction_reads_valkey(
         )
     ]
 
-    # Force datetime to trigger execution interval immediately
+    # Force datetime to trigger execution interval immediately.
+    # The first 3 calls to now() set the per-run timers (lines 235-237 in main.py).
+    # Subsequent calls must return a later time so that (now - timer) > interval.
+    now_call_count = 0
+
     class MockDatetime(datetime.datetime):
         @classmethod
         def now(cls, tz=None):
-            # Return a time far in the future so that the interval > SCRIPT_EXECUTION_INTERVAL is True
-            return datetime.datetime(2050, 1, 1, tzinfo=datetime.UTC)
+            nonlocal now_call_count
+            now_call_count += 1
+            if now_call_count <= 3:
+                # Timer initialization: return a baseline time
+                return datetime.datetime(2050, 1, 1, 0, 0, 0, tzinfo=datetime.UTC)
+            # Subsequent calls: return a time far enough ahead to trigger all intervals
+            return datetime.datetime(2050, 1, 2, 0, 0, 0, tzinfo=datetime.UTC)
 
     with patch("live_data_processor.main.datetime.datetime", MockDatetime):
         with pytest.raises(StopIteration):
