@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import redis
 
-from live_data_processor.epics_streamer import main
 from live_data_processor.exceptions import SampleLogError
+from live_data_processor.epics_streamer import main
 
 
 @patch("live_data_processor.epics_streamer.init_pvs")

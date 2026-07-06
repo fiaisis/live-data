@@ -75,16 +75,18 @@ def test_start_live_reduction_reads_valkey(
     from live_data_processor.main import start_live_reduction, VALKEY_CLIENT
     import datetime
 
-    mock_init_run.return_value = MagicMock(spec=RunStart)
+    run_start_mock = MagicMock(spec=RunStart)
+    # First call: return a valid RunStart. Second call: raise to exit the while True loop.
+    mock_init_run.side_effect = [run_start_mock, StopIteration("break out of while loop")]
 
-    # Mock events_consumer to yield exactly one message
+    # Mock events_consumer to yield exactly one message per iteration
+    mock_message = MagicMock()
     mock_events_consumer = MagicMock()
-    mock_events_consumer.__iter__.return_value = [MagicMock()]
+    mock_events_consumer.__iter__ = MagicMock(return_value=iter([mock_message]))
     mock_runinfo_consumer = MagicMock()
 
-    # Make find_latest_run_start return a new RunStart to break the main `while True` loop
-    new_run_start = MagicMock(spec=RunStart)
-    mock_find_latest.return_value = new_run_start
+    # Return None so the "new run" check doesn't trigger a break (we exit via init_run instead)
+    mock_find_latest.return_value = None
 
     # Mock Valkey xrange to return some data
     VALKEY_CLIENT.xrange = MagicMock()
@@ -107,14 +109,14 @@ def test_start_live_reduction_reads_valkey(
             return datetime.datetime(2050, 1, 1, tzinfo=datetime.UTC)
 
     with patch("live_data_processor.main.datetime.datetime", MockDatetime):
-        # We need to catch the StopIteration or just let it break out of the while loop
-        start_live_reduction(
-            mock_events_consumer,
-            mock_runinfo_consumer,
-            kafka_sample_log_streaming=False,
-            epics_proc=None,
-            epics_stop_event=None,
-        )
+        with pytest.raises(StopIteration):
+            start_live_reduction(
+                mock_events_consumer,
+                mock_runinfo_consumer,
+                kafka_sample_log_streaming=False,
+                epics_proc=None,
+                epics_stop_event=None,
+            )
 
     # Verify xrange was called with the correct stream key
     VALKEY_CLIENT.xrange.assert_called_once()
