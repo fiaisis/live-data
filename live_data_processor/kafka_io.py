@@ -129,3 +129,28 @@ def setup_consumers(
     else:
         events_consumer.subscribe([f"{instrument}_events"])
     return events_consumer, runinfo_consumer
+
+
+def get_consumer_lag(consumer: KafkaConsumer) -> dict[int, int]:
+    """
+    Calculate the lag (number of unread messages) for each partition assigned to the consumer.
+
+    This function computes how many messages are waiting to be consumed by comparing
+    the consumer's current position with the high watermark (latest offset) on the broker
+    for each assigned partition.
+
+    :param consumer: A KafkaConsumer instance with active partition assignments.
+    :return: A dictionary mapping partition IDs to their respective lag counts (number of unread messages).
+    """
+    consumer_partitions = consumer.assignment()
+    if not consumer_partitions:
+        return {}
+
+    current_offsets = {p.partition: consumer.position(p) for p in consumer_partitions}
+    end_offsets = consumer.end_offsets(list(consumer_partitions))
+    lags = {}
+    for tp, end_offset in end_offsets.items():
+        current = current_offsets.get(tp.partition, 0)
+        lags[tp.partition] = end_offset - current
+
+    return lags
