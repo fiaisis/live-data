@@ -77,7 +77,10 @@ def test_start_live_reduction_reads_valkey(
 
     run_start_mock = MagicMock(spec=RunStart)
     # First call: return a valid RunStart. Second call: raise to exit the while True loop.
-    mock_init_run.side_effect = [run_start_mock, StopIteration("break out of while loop")]
+    mock_init_run.side_effect = [
+        run_start_mock,
+        StopIteration("break out of while loop"),
+    ]
 
     # Mock events_consumer to yield exactly one message per iteration
     mock_message = MagicMock()
