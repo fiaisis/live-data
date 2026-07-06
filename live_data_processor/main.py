@@ -34,7 +34,6 @@ from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteE
 from live_data_processor.kafka_io import (
     datetime_from_record_timestamp,
     find_latest_run_start,
-    get_consumer_lag,
     seek_event_consumer_to_runstart,
     setup_consumers,
 )
