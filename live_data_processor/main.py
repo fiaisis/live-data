@@ -270,9 +270,6 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     kafka_sample_log_streaming: bool = False,
-    epics_proc=None,
-    epics_stop_event=None,
-    epics_log_file: str = "sample_log.txt",
 ) -> None:
     """
     Run the main live data reduction loop for an instrument.
@@ -438,9 +435,6 @@ def main() -> None:
         events_consumer,
         runinfo_consumer,
         kafka_sample_log_streaming=kafka_sample_streaming,
-        epics_proc=epics_proc,
-        epics_stop_event=epics_stop_event,
-        epics_log_file=f"{INSTRUMENT.lower()}_log.txt",
     )
 
 

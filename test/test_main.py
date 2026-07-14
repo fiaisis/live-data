@@ -126,8 +126,6 @@ def test_start_live_reduction_reads_valkey(
                 mock_events_consumer,
                 mock_runinfo_consumer,
                 kafka_sample_log_streaming=False,
-                epics_proc=None,
-                epics_stop_event=None,
             )
 
     # Verify xrange was called with the correct stream key
