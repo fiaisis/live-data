@@ -429,8 +429,6 @@ def main() -> None:
     events_consumer, runinfo_consumer = setup_consumers(INSTRUMENT, kafka_config)
     kafka_sample_streaming = False
 
-    epics_proc, epics_stop_event = None, None
-
     start_live_reduction(
         events_consumer,
         runinfo_consumer,
