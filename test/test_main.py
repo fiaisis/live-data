@@ -137,6 +137,9 @@ def test_start_live_reduction_reads_valkey(
     assert args[1] == "-"
     assert args[2] == "+"
 
+    # Verify the Valkey EPICS stream key was deleted at the run boundary
+    VALKEY_CLIENT.delete.assert_called_with("instrument:MERLIN:epics_stream")
+
     # Verify the values were added to the workspace log
     mock_add.assert_called_once()
     mock_add.assert_called_with("lives", "TestBlock", "2023-01-01T12:00:00Z", "10.5")

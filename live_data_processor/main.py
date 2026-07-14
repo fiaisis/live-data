@@ -307,13 +307,19 @@ def start_live_reduction(  # noqa: C901, PLR0915
                 events_consumer,
                 runinfo_consumer,
                 current_run_start,
-                streaming_kafka_sample_log=kafka_sample_log_streaming,
             )
         except (TopicIncompleteError, OffsetNotFoundError) as ex:
             external_logger.warning("No run could be found. Retrying in %s seconds...", RUN_CHECK_INTERVAL)
             internal_logger.warning("Could not initialize run: %s. Retrying in %s seconds...", ex, RUN_CHECK_INTERVAL)
             time.sleep(RUN_CHECK_INTERVAL)
             continue
+
+        # Delete previous run's EPICS stream data from Valkey cache if we are using file/Valkey-based logging
+        if not kafka_sample_log_streaming:
+            epics_stream_key = f"instrument:{INSTRUMENT}:epics_stream"
+            VALKEY_CLIENT.delete(epics_stream_key)
+            internal_logger.info("Cleared Valkey EPICS stream: %s", epics_stream_key)
+
         external_logger.info(
             "Run began at %s",
             datetime_from_record_timestamp(current_run_start.StartTime()),
