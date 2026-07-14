@@ -266,7 +266,7 @@ def run_monitor_thread(
         internal_logger.info("Run monitor thread shut down cleanly.")
 
 
-def start_live_reduction(  # noqa: C901, PLR0915
+def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
     kafka_sample_log_streaming: bool = False,
