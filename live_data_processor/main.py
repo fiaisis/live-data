@@ -338,7 +338,7 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
             if message.offset % 1000 == 0:
                 lags = get_consumer_lag(events_consumer)
                 total_lag = sum(lags.values())
-                internal_logger.info("Current Kafka Lag: {total_lag} messages")
+                internal_logger.info(f"Current Kafka Lag: {total_lag} messages")
 
             now = datetime.datetime.now(tz=datetime.UTC)
 
