@@ -34,6 +34,7 @@ from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteE
 from live_data_processor.kafka_io import (
     datetime_from_record_timestamp,
     find_latest_run_start,
+    get_consumer_lag,
     seek_event_consumer_to_runstart,
     setup_consumers,
 )
@@ -333,6 +334,11 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
             process_message(message, kafka_sample_streaming=kafka_sample_log_streaming)
+            #Optional: Log lag every 1000 messages to avoid spamming the broker
+            if message.offset % 1000 == 0:
+                lags = get_consumer_lag(events_consumer)
+                total_lag = sum(lags.values())
+                internal_logger.info("Current Kafka Lag: {total_lag} messages")
 
             now = datetime.datetime.now(tz=datetime.UTC)
 

@@ -181,7 +181,7 @@ def main(wait_timeout: float = 1.0) -> None:
                     "value": str(value),
                     "timestamp": ts_str,
                 },
-                maxlen=1000,  # Keep only the last 1000 entries
+                maxlen=10000,  # Keep only the last 10000 entries
             )
         except redis.ConnectionError:
             internal_logger.error("Lost connection to Valkey, Retrying...")

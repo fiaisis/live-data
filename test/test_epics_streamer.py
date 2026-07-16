@@ -34,7 +34,7 @@ def test_main_valkey_xadd(mock_valkey_client, mock_init_pvs):
     assert fields["block_name"] == "TestBlock"
     assert fields["value"] == "42.5"
     assert fields["timestamp"] == "2023-11-14T22:13:20+00:00"
-    assert kwargs["maxlen"] == 1000
+    assert kwargs["maxlen"] == 10000
 
 
 @patch("live_data_processor.epics_streamer.init_pvs")
