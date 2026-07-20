@@ -335,6 +335,7 @@ def setup_deployment(
     _setup_archive_pv(instrument, namespace)
     _setup_archive_pvc(instrument, namespace)
 
+    #we want 3 of these eventually; run monitor, epics streamer, main
     container = V1Container(
         name=f"livedataprocessor-{instrument}",
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
@@ -351,8 +352,27 @@ def setup_deployment(
             V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
         ],
     )
+    
+    epics_streamer_container = V1Container(
+        name=f"epics-streamer-{instrument}",
+        command=["python", "/epics_streamer.py"],
+        image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
+        resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "128Gi"}),
+        volume_mounts=[
+            V1VolumeMount(name="ceph-mount", mount_path="/output"),
+            V1VolumeMount(name="archive-mount", mount_path="/archive"),
+        ],
+        env=[
+            V1EnvVar(name="INSTRUMENT", value=instrument),
+            V1EnvVar(name="GITHUB_API_TOKEN", value=GITHUB_API_TOKEN),
+            V1EnvVar(name="FIA_API_URL", value=FIA_API_URL),
+            V1EnvVar(name="VALKEY_HOST", value=VALKEY_HOST),
+            V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
+        ],
+    )
+
     pod_spec = V1PodSpec(
-        containers=[container],
+        containers=[container, epics_streamer_container],
         restart_policy="Always",
         service_account="live-data-operator",
         tolerations=[V1Toleration(key="staging", operator="Equal", value="big", effect="NoSchedule")],
