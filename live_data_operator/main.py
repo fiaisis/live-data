@@ -335,7 +335,7 @@ def setup_deployment(
     _setup_archive_pv(instrument, namespace)
     _setup_archive_pvc(instrument, namespace)
 
-    #we want 3 of these eventually; run monitor, epics streamer, main
+    # we want 3 of these eventually; run monitor, epics streamer, main
     container = V1Container(
         name=f"livedataprocessor-{instrument}",
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
@@ -352,7 +352,7 @@ def setup_deployment(
             V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
         ],
     )
-    
+
     epics_streamer_container = V1Container(
         name=f"epics-streamer-{instrument}",
         command=["python", "/epics_streamer.py"],
