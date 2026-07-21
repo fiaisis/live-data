@@ -29,15 +29,28 @@ class ValkeyStreamHandler(logging.Handler):
     - If the internal queue is full, oldest messages are dropped in favor of newest to avoid unbounded memory growth.
     """
 
-    def __init__(self, client: redis.Redis, stream_key: str, maxlen: int = 2000, queue_maxsize: int = 5000) -> None:
-        super().__init__()
-        self.client = client
-        self.stream_key = stream_key
-        self.maxlen = maxlen
-        self._queue: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=queue_maxsize)
-        self._stop_event = threading.Event()
-        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name=f"ValkeyWriter-{stream_key}")
-        self._worker_thread.start()
+    def __init__(
+            self,
+            client: redis.Redis,
+            stream_key: str,
+            maxlen: int = 2000,
+            queue_maxsize: int = 5000,
+            max_delivery_attempts: int = MAX_DELIVERY_ATTEMPTS,
+            backoff_base: float = 0.5,
+        ) -> None:
+            super().__init__()
+            self.client = client
+            self.stream_key = stream_key
+            self.maxlen = maxlen
+            self._queue: queue.Queue[tuple[str, str, logging.LogRecord]] = queue.Queue(maxsize=queue_maxsize)
+            self._stop_event = threading.Event()
+            # Delivery retry configuration (exposed for testing)
+            self.max_delivery_attempts = max_delivery_attempts
+            self.backoff_base = backoff_base
+            self._worker_thread = threading.Thread(
+                target=self._worker_loop, daemon=True, name=f"ValkeyWriter-{stream_key}"
+            )
+            self._worker_thread.start()
 
     def emit(self, record: logging.LogRecord) -> None:
         """
@@ -45,7 +58,7 @@ class ValkeyStreamHandler(logging.Handler):
         """
         try:
             msg = self.format(record)
-            entry = (msg, record.levelname)
+            entry = (msg, record.levelname, record)
             try:
                 # If queue is full, drop the oldest item to make room (discarding oldest is preferable
                 # to blocking or crashing the application).
@@ -58,17 +71,18 @@ class ValkeyStreamHandler(logging.Handler):
                     self._queue.put(entry, block=False)
                 except Exception:
                     # As a final fallback write to stderr so logs aren't silently lost
-                    sys.stderr.write(f"[VALKEY DROP] {msg}\n")
+                    with suppress(Exception):
+                        sys.stderr.write(f"[VALKEY DROP] {msg}\n")
         except Exception:
             # Avoid any exception escaping from emit
             self.handleError(record)
 
     def _worker_loop(self) -> None:
         """Background worker that delivers queued log records to Redis with retries."""
-        backoff_base = 0.5
+        backoff_base = self.backoff_base
         while not self._stop_event.is_set():
             try:
-                msg, level = self._queue.get(timeout=1.0)
+                msg, level, record_obj = self._queue.get(timeout=1.0)
             except queue.Empty:
                 continue
 
@@ -86,9 +100,13 @@ class ValkeyStreamHandler(logging.Handler):
                     with suppress(Exception):
                         time.sleep(sleep_time)
                     # After a number of attempts, if still failing, emit to stderr and drop this record
-                    if attempt >= MAX_DELIVERY_ATTEMPTS:
+                    if attempt >= self.max_delivery_attempts:
+                        # Best-effort stderr reporting
                         with suppress(Exception):
                             sys.stderr.write(f"[VALKEY ERR] dropping log after repeated failures: {msg}\n")
+                        # Notify logging framework about the failure for visibility
+                        with suppress(Exception):
+                            self.handleError(record_obj)
                         break
 
     def close(self) -> None:
@@ -99,7 +117,7 @@ class ValkeyStreamHandler(logging.Handler):
         # Drain remaining items to stderr to avoid silent loss
         while True:
             try:
-                msg, _ = self._queue.get(block=False)
+                msg, _level, _record = self._queue.get(block=False)
                 with suppress(Exception):
                     sys.stderr.write(f"[VALKEY DRAIN] {msg}\n")
             except queue.Empty:
