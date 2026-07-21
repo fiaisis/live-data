@@ -136,7 +136,7 @@ def _format_timestamp(timestamp_ns: int) -> str:
     Format timestamp to ISO 8601 using UTC timezone.
     """
     # Use the standard library's timezone object for UTC
-    dt = datetime.datetime.fromtimestamp(timestamp_ns / 1e9, tz=datetime.timezone.utc)
+    dt = datetime.datetime.fromtimestamp(timestamp_ns / 1e9, tz=datetime.UTC)
     return dt.isoformat()
 
 

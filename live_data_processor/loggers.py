@@ -34,7 +34,7 @@ class ValkeyStreamHandler(logging.Handler):
         self.client = client
         self.stream_key = stream_key
         self.maxlen = maxlen
-        self._queue: queue.Queue[tuple[str,str]] = queue.Queue(maxsize=queue_maxsize)
+        self._queue: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=queue_maxsize)
         self._stop_event = threading.Event()
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name=f"ValkeyWriter-{stream_key}")
         self._worker_thread.start()
