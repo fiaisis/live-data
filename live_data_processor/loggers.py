@@ -1,17 +1,18 @@
 import io
 import logging
 import os
-import sys
 import queue
+import sys
 import threading
 import time
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 import redis
 
 VALKEY_HOST: str = os.environ.get("VALKEY_HOST", "localhost")
 VALKEY_PORT: int = int(os.environ.get("VALKEY_PORT", "6379"))
+MAX_DELIVERY_ATTEMPTS: int = 10
 
 # Global client for convenience; individual handlers will manage their own reconnection logic.
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
@@ -33,7 +34,7 @@ class ValkeyStreamHandler(logging.Handler):
         self.client = client
         self.stream_key = stream_key
         self.maxlen = maxlen
-        self._queue: "queue.Queue[tuple[str,str]]" = queue.Queue(maxsize=queue_maxsize)
+        self._queue: queue.Queue[tuple[str,str]] = queue.Queue(maxsize=queue_maxsize)
         self._stop_event = threading.Event()
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name=f"ValkeyWriter-{stream_key}")
         self._worker_thread.start()
@@ -50,11 +51,9 @@ class ValkeyStreamHandler(logging.Handler):
                 # to blocking or crashing the application).
                 self._queue.put(entry, block=False)
             except queue.Full:
-                try:
+                with suppress(Exception):
                     # Remove one oldest item then enqueue current
                     _ = self._queue.get(block=False)
-                except Exception:
-                    pass
                 try:
                     self._queue.put(entry, block=False)
                 except Exception:
@@ -80,20 +79,16 @@ class ValkeyStreamHandler(logging.Handler):
                     # Use xadd with maxlen to trim the stream server-side
                     self.client.xadd(self.stream_key, {"msg": msg, "level": level}, maxlen=self.maxlen)
                     break
-                except Exception as exc:
+                except Exception:
                     attempt += 1
                     # On repeated failures, wait progressively longer, but remain responsive to shutdown
                     sleep_time = min(5.0, backoff_base * (2 ** (attempt - 1)))
-                    try:
+                    with suppress(Exception):
                         time.sleep(sleep_time)
-                    except Exception:
-                        pass
                     # After a number of attempts, if still failing, emit to stderr and drop this record
-                    if attempt >= 10:
-                        try:
+                    if attempt >= MAX_DELIVERY_ATTEMPTS:
+                        with suppress(Exception):
                             sys.stderr.write(f"[VALKEY ERR] dropping log after repeated failures: {msg}\n")
-                        except Exception:
-                            pass
                         break
 
     def close(self) -> None:
@@ -104,11 +99,9 @@ class ValkeyStreamHandler(logging.Handler):
         # Drain remaining items to stderr to avoid silent loss
         while True:
             try:
-                msg, level = self._queue.get(block=False)
-                try:
+                msg, _ = self._queue.get(block=False)
+                with suppress(Exception):
                     sys.stderr.write(f"[VALKEY DRAIN] {msg}\n")
-                except Exception:
-                    pass
             except queue.Empty:
                 break
         super().close()
