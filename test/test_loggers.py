@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 from live_data_processor.loggers import (
@@ -30,6 +31,13 @@ def test_valkey_stream_handler_emit_success():
 
     handler.emit(record)
 
+    # Wait for background worker to call xadd (async). Time out after 2s.
+    start = time.time()
+    while time.time() - start < 2.0:
+        if mock_client.xadd.call_count > 0:
+            break
+        time.sleep(0.01)
+
     # Update the dictionary here to expect "level": "INFO"
     mock_client.xadd.assert_called_once_with(
         "test_stream", {"msg": "Test log message", "level": "INFO"}, maxlen=100
@@ -54,6 +62,13 @@ def test_valkey_stream_handler_emit_failure(mock_handle_error):
     )
 
     handler.emit(record)
+
+    # Wait for background worker to exhaust retries and call handleError (async). Time out after 3s.
+    start = time.time()
+    while time.time() - start < 3.0:
+        if mock_handle_error.call_count > 0:
+            break
+        time.sleep(0.01)
 
     mock_handle_error.assert_called_once_with(record)
 
