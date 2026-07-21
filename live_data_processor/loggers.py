@@ -30,27 +30,25 @@ class ValkeyStreamHandler(logging.Handler):
     """
 
     def __init__(
-            self,
-            client: redis.Redis,
-            stream_key: str,
-            maxlen: int = 2000,
-            queue_maxsize: int = 5000,
-            max_delivery_attempts: int = MAX_DELIVERY_ATTEMPTS,
-            backoff_base: float = 0.5,
-        ) -> None:
-            super().__init__()
-            self.client = client
-            self.stream_key = stream_key
-            self.maxlen = maxlen
-            self._queue: queue.Queue[tuple[str, str, logging.LogRecord]] = queue.Queue(maxsize=queue_maxsize)
-            self._stop_event = threading.Event()
-            # Delivery retry configuration (exposed for testing)
-            self.max_delivery_attempts = max_delivery_attempts
-            self.backoff_base = backoff_base
-            self._worker_thread = threading.Thread(
-                target=self._worker_loop, daemon=True, name=f"ValkeyWriter-{stream_key}"
-            )
-            self._worker_thread.start()
+        self,
+        client: redis.Redis,
+        stream_key: str,
+        maxlen: int = 2000,
+        queue_maxsize: int = 5000,
+        max_delivery_attempts: int = MAX_DELIVERY_ATTEMPTS,
+        backoff_base: float = 0.5,
+    ) -> None:
+        super().__init__()
+        self.client = client
+        self.stream_key = stream_key
+        self.maxlen = maxlen
+        self._queue: queue.Queue[tuple[str, str, logging.LogRecord]] = queue.Queue(maxsize=queue_maxsize)
+        self._stop_event = threading.Event()
+        # Delivery retry configuration (exposed for testing)
+        self.max_delivery_attempts = max_delivery_attempts
+        self.backoff_base = backoff_base
+        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name=f"ValkeyWriter-{stream_key}")
+        self._worker_thread.start()
 
     def emit(self, record: logging.LogRecord) -> None:
         """
