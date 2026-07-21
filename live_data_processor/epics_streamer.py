@@ -40,7 +40,7 @@ from epics import PV, caget
 
 from live_data_processor.exceptions import SampleLogError
 
-INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
+INSTRUMENT = os.environ.get("INSTRUMENT", os.environ.get("INSTRUMENT_NAME", "Unknown Instrument")).upper()
 VALKEY_HOST = os.environ.get("VALKEY_HOST", "localhost")
 VALKEY_PORT = int(os.environ.get("VALKEY_PORT", "6379"))
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
@@ -133,13 +133,10 @@ def init_pvs(
 
 def _format_timestamp(timestamp_ns: int) -> str:
     """
-    Format timestamp to ISO 8601 using the required pattern:
-
-        datetime.datetime.fromtimestamp(
-            timestamp_unix_ns / 1e9, tz=datetime.UTC
-        ).isoformat()
+    Format timestamp to ISO 8601 using UTC timezone.
     """
-    dt = datetime.datetime.fromtimestamp(timestamp_ns / 1e9, tz=datetime.UTC)
+    # Use the standard library's timezone object for UTC
+    dt = datetime.datetime.fromtimestamp(timestamp_ns / 1e9, tz=datetime.timezone.utc)
     return dt.isoformat()
 
 

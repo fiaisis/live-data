@@ -2,6 +2,9 @@ import io
 import logging
 import os
 import sys
+import queue
+import threading
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -10,39 +13,105 @@ import redis
 VALKEY_HOST: str = os.environ.get("VALKEY_HOST", "localhost")
 VALKEY_PORT: int = int(os.environ.get("VALKEY_PORT", "6379"))
 
+# Global client for convenience; individual handlers will manage their own reconnection logic.
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 
 
 class ValkeyStreamHandler(logging.Handler):
     """
-    Custom logging handler that pushes logs to a Valkey Stream.
+    Robust logging handler that pushes logs to a Valkey stream (Redis).
+
+    Behavior:
+    - Non-blocking emit(): places formatted log records on an internal bounded queue.
+    - Background worker drains the queue and performs XADD calls to Redis.
+    - On Redis errors the worker retries with backoff; records are not discarded immediately.
+    - If the internal queue is full, oldest messages are dropped in favor of newest to avoid unbounded memory growth.
     """
 
-    def __init__(self, client: redis.Redis, stream_key: str, maxlen: int = 2000) -> None:
-        """
-        Initialize the ValkeyStreamHandler.
-
-        :param client: An active Valkey (Redis) client connection.
-        :param stream_key: The stream key to push logs to.
-        :param maxlen: The maximum length of the stream before old logs are truncated. Defaults to 2000.
-        """
+    def __init__(self, client: redis.Redis, stream_key: str, maxlen: int = 2000, queue_maxsize: int = 5000) -> None:
         super().__init__()
         self.client = client
         self.stream_key = stream_key
         self.maxlen = maxlen
+        self._queue: "queue.Queue[tuple[str,str]]" = queue.Queue(maxsize=queue_maxsize)
+        self._stop_event = threading.Event()
+        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name=f"ValkeyWriter-{stream_key}")
+        self._worker_thread.start()
 
     def emit(self, record: logging.LogRecord) -> None:
         """
-        Emit a record to the Valkey stream.
-
-        :param record: The log record to be formatted and emitted.
+        Quickly enqueue a formatted record for background delivery to Redis.
         """
         try:
             msg = self.format(record)
-            # Add the level directly to the Valkey stream dictionary
-            self.client.xadd(self.stream_key, {"msg": msg, "level": record.levelname}, maxlen=self.maxlen)
+            entry = (msg, record.levelname)
+            try:
+                # If queue is full, drop the oldest item to make room (discarding oldest is preferable
+                # to blocking or crashing the application).
+                self._queue.put(entry, block=False)
+            except queue.Full:
+                try:
+                    # Remove one oldest item then enqueue current
+                    _ = self._queue.get(block=False)
+                except Exception:
+                    pass
+                try:
+                    self._queue.put(entry, block=False)
+                except Exception:
+                    # As a final fallback write to stderr so logs aren't silently lost
+                    sys.stderr.write(f"[VALKEY DROP] {msg}\n")
         except Exception:
+            # Avoid any exception escaping from emit
             self.handleError(record)
+
+    def _worker_loop(self) -> None:
+        """Background worker that delivers queued log records to Redis with retries."""
+        backoff_base = 0.5
+        while not self._stop_event.is_set():
+            try:
+                msg, level = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            # Attempt to deliver with retry/backoff
+            attempt = 0
+            while True:
+                try:
+                    # Use xadd with maxlen to trim the stream server-side
+                    self.client.xadd(self.stream_key, {"msg": msg, "level": level}, maxlen=self.maxlen)
+                    break
+                except Exception as exc:
+                    attempt += 1
+                    # On repeated failures, wait progressively longer, but remain responsive to shutdown
+                    sleep_time = min(5.0, backoff_base * (2 ** (attempt - 1)))
+                    try:
+                        time.sleep(sleep_time)
+                    except Exception:
+                        pass
+                    # After a number of attempts, if still failing, emit to stderr and drop this record
+                    if attempt >= 10:
+                        try:
+                            sys.stderr.write(f"[VALKEY ERR] dropping log after repeated failures: {msg}\n")
+                        except Exception:
+                            pass
+                        break
+
+    def close(self) -> None:
+        """Stop the worker thread and flush remaining messages (best-effort)."""
+        self._stop_event.set()
+        # Wait briefly for worker to exit
+        self._worker_thread.join(timeout=2)
+        # Drain remaining items to stderr to avoid silent loss
+        while True:
+            try:
+                msg, level = self._queue.get(block=False)
+                try:
+                    sys.stderr.write(f"[VALKEY DRAIN] {msg}\n")
+                except Exception:
+                    pass
+            except queue.Empty:
+                break
+        super().close()
 
 
 def setup_loggers(instrument_name: str) -> tuple[logging.Logger, logging.Logger, str]:

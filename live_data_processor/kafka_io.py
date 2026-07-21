@@ -17,7 +17,7 @@ from streaming_data_types.fbschemas.run_stop_6s4t.RunStop import RunStop
 
 from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteError
 
-INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
+INSTRUMENT = os.environ.get("INSTRUMENT", os.environ.get("INSTRUMENT_NAME", "Unknown Instrument")).upper()
 internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
 external_logger = logging.getLogger(f"external_{INSTRUMENT}")
 
