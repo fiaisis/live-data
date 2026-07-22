@@ -53,7 +53,8 @@ def test_valkey_stream_handler_emit_failure(mock_handle_error):
         client=mock_client,
         stream_key="test_stream",
         max_delivery_attempts=1,
-        backoff_base=0.01,)
+        backoff_base=0.01,
+    )
 
     record = logging.LogRecord(
         name="test_logger",
