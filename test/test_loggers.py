@@ -49,7 +49,11 @@ def test_valkey_stream_handler_emit_failure(mock_handle_error):
     """Test that exceptions during emission are delegated to handleError."""
     mock_client = MagicMock()
     mock_client.xadd.side_effect = Exception("Valkey disconnected")
-    handler = ValkeyStreamHandler(client=mock_client, stream_key="test_stream")
+    handler = ValkeyStreamHandler(
+        client=mock_client,
+        stream_key="test_stream",
+        max_delivery_attempts=1,
+        backoff_base=0.01,)
 
     record = logging.LogRecord(
         name="test_logger",
