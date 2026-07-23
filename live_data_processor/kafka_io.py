@@ -17,7 +17,7 @@ from streaming_data_types.fbschemas.run_stop_6s4t.RunStop import RunStop
 
 from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteError
 
-INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
+INSTRUMENT = os.environ.get("INSTRUMENT", os.environ.get("INSTRUMENT_NAME", "Unknown Instrument")).upper()
 internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
 external_logger = logging.getLogger(f"external_{INSTRUMENT}")
 
@@ -84,7 +84,6 @@ def seek_event_consumer_to_runstart(
     instrument: str,
     run_start: RunStart,
     events_consumer: KafkaConsumer,
-    streaming_kafka_sample_log: bool = False,
 ) -> None:
     """
     Adjust the given event consumer's position to the beginning of the given run
@@ -96,9 +95,7 @@ def seek_event_consumer_to_runstart(
     run_start_ms = run_start.StartTime()
     timestamp = datetime_from_record_timestamp(run_start_ms)
     external_logger.info("Seeking event consumer to run start: %s", timestamp)
-    topics = (
-        [f"{instrument}_events", f"{instrument}_sampleEnv"] if streaming_kafka_sample_log else [f"{instrument}_events"]
-    )
+    topics = [f"{instrument}_events"]
     # Find the offset for a given time and seek to it
     for topic in topics:
         tp = TopicPartition(topic, 0)
@@ -116,7 +113,6 @@ def seek_event_consumer_to_runstart(
 def setup_consumers(
     instrument: str,
     kafka_config: dict[str, Any],
-    kafka_sample_log_streaming: bool = False,
 ) -> tuple[KafkaConsumer, KafkaConsumer]:
     """
     Create the consumers for events and runinfo
@@ -124,10 +120,7 @@ def setup_consumers(
     """
     events_consumer = KafkaConsumer(**kafka_config)
     runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", consumer_timeout_ms=10000, **kafka_config)
-    if kafka_sample_log_streaming:
-        events_consumer.subscribe([f"{instrument}_events", f"{instrument}_sampleEnv"])
-    else:
-        events_consumer.subscribe([f"{instrument}_events"])
+    events_consumer.subscribe([f"{instrument}_events"])
     return events_consumer, runinfo_consumer
 
 

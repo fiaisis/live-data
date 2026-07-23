@@ -27,25 +27,26 @@ reduction workflow and results in `SampleLogError` being raised.
 """
 
 import binascii
-import contextlib
 import datetime
 import logging
-import multiprocessing as mp
 import os
 import queue
-import threading
 import time
 import zlib
-from multiprocessing import Process
-from pathlib import Path
 from typing import Any
 
+import redis
 from epics import PV, caget
 
 from live_data_processor.exceptions import SampleLogError
 
-INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
-internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
+INSTRUMENT = os.environ.get("INSTRUMENT", os.environ.get("INSTRUMENT_NAME", "Unknown Instrument")).upper()
+VALKEY_HOST = os.environ.get("VALKEY_HOST", "localhost")
+VALKEY_PORT = int(os.environ.get("VALKEY_PORT", "6379"))
+VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
+STREAM_KEY = f"instrument:{INSTRUMENT}:epics_stream"
+
+logger = logging.getLogger(f"internal_{INSTRUMENT}")
 
 # EPICS configuration (must be set before any EPICS calls)
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
@@ -127,45 +128,20 @@ def init_pvs(
 
         pv_map[name] = pv
 
+    logger.info("Discovered %d PVs for sample blocks", len(pv_map))
     return pv_map
 
 
 def _format_timestamp(timestamp_ns: int) -> str:
     """
-    Format timestamp to ISO 8601 using the required pattern:
-
-        datetime.datetime.fromtimestamp(
-            timestamp_unix_ns / 1e9, tz=datetime.UTC
-        ).isoformat()
+    Format timestamp to ISO 8601 using UTC timezone.
     """
+    # Use the standard library's timezone object for UTC
     dt = datetime.datetime.fromtimestamp(timestamp_ns / 1e9, tz=datetime.UTC)
     return dt.isoformat()
 
 
-def _writer_loop(
-    file_path: str,
-    event_queue: "queue.Queue[EventT]",
-    stop_event: threading.Event,
-) -> None:
-    """
-    Background loop that drains the event queue and writes to file.
-    """
-    with Path(file_path).open("w", encoding="utf-8") as f:
-        while not stop_event.is_set() or not event_queue.empty():
-            try:
-                block_name, value, timestamp_ns = event_queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-
-            if value is None or value == "None":
-                continue
-
-            ts_str = _format_timestamp(timestamp_ns)
-            line = f"{block_name} - {value} - {ts_str}\n"
-            f.write(line)
-
-
-def _process_entrypoint(file_path: str, stop_event: "mp.Event", wait_timeout: float = 1.0) -> None:
+def main(wait_timeout: float = 1.0) -> None:
     """
     Child process entrypoint: clears file, initialises PVs and drains the queue to file.
     The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
@@ -173,85 +149,42 @@ def _process_entrypoint(file_path: str, stop_event: "mp.Event", wait_timeout: fl
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()
 
-    # Clear the file at (re)start
-    try:
-        with Path(file_path).open("w", encoding="utf-8"):
-            pass
-    except Exception as exc:
-        internal_logger.exception("Failed to clear epics logs file, reduction is ruined.")
-        raise SampleLogError("Failed to clear the epics logs file, reduction is ruined.") from exc
-
     try:
         pv_map = init_pvs(event_queue=event_queue, wait_timeout=wait_timeout)
         if not pv_map:
-            internal_logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+            logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
             raise SampleLogError("No PVs were discovered, therefore no epics values will be streamed.")
     except Exception as exc:
-        internal_logger.critical(
-            "Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless"
-        )
+        logger.critical("Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
         raise SampleLogError("Failed to discover any PVs, therefore no epics values will be streamed.") from exc
 
     # Use a local loop; do not spawn extra threads in the child process for simplicity
-    with Path(file_path).open("a", encoding="utf-8") as f:
-        while not stop_event.is_set() or not event_queue.empty():
-            try:
-                block_name, value, timestamp_ns = event_queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
+    while True:
+        try:
+            block_name, value, timestamp_ns = event_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
 
-            if value is None or value == "None":
-                continue
+        if value is None or value == "None":
+            continue
 
-            ts_str = _format_timestamp(timestamp_ns)
-            line = f"{block_name} - {value} - {ts_str}\n"
-            try:
-                f.write(line)
-                f.flush()
-            except Exception as exc:
-                raise SampleLogError("Failed to write to epics logs file, reduction is ruined.") from exc
-
-
-def start_logging_process(file_path: str, wait_timeout: float = 1.0) -> tuple[mp.Process, mp.Event]:
-    """
-    Start a background process that streams EPICS updates to a file.
-
-    :param file_path: Path to the file to write to.
-    :param wait_timeout: Optional timeout for PV connection.
-    :return: A tuple of the process and the stop event.
-    """
-    stop_event: mp.Event = mp.Event()
-    proc = mp.Process(
-        target=_process_entrypoint,
-        args=(file_path, stop_event, wait_timeout),
-        daemon=True,
-    )
-    proc.start()
-    return proc, stop_event
+        ts_str = _format_timestamp(timestamp_ns)
+        try:
+            VALKEY_CLIENT.xadd(
+                STREAM_KEY,
+                {
+                    "block_name": block_name,
+                    "value": str(value),
+                    "timestamp": ts_str,
+                },
+                maxlen=10000,  # Keep only the last 10000 entries
+            )
+        except redis.ConnectionError:
+            logger.error("Lost connection to Valkey, Retrying...")
+            time.sleep(1)
+        except Exception as exc:
+            raise SampleLogError("Failed to write to Valkey stream.") from exc
 
 
-def restart_epics_streaming(
-    epics_log_file: str, epics_proc: Process | Any, epics_stop_event
-) -> tuple[Process, mp.Event]:
-    """
-    Restart the background epics streaming process
-
-    :param epics_log_file: The file to write logs to
-    :param epics_proc: The currently running streaming process
-    :param epics_stop_event: The stop event of the currently running streaming process
-    :return: The newly restarted process and stop event
-    """
-    # Stop existing EPICS logging process (if any)
-    if epics_stop_event is not None:
-        epics_stop_event.set()
-
-    with contextlib.suppress(Exception):
-        if epics_proc is not None:
-            epics_proc.join(timeout=5)
-            if epics_proc.is_alive():
-                epics_proc.terminate()
-                epics_proc.join(timeout=2)
-
-    # Start a fresh EPICS logging process for the new run
-    epics_proc, epics_stop_event = start_logging_process(epics_log_file)
-    return epics_proc, epics_stop_event
+if __name__ == "__main__":
+    main()
