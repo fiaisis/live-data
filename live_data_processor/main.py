@@ -6,7 +6,6 @@ reduction script refresh/execute loop to process neutron event data in
 near real-time for a selected instrument.
 """
 
-import contextlib
 import datetime
 import os
 import queue
@@ -25,7 +24,6 @@ from mantid.simpleapi import (
     AddTimeSeriesLog,
     RemoveWorkspaceHistory,
 )
-from streaming_data_types import deserialise_f144
 from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMessage
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 from streaming_data_types.utils import get_schema
@@ -256,7 +254,7 @@ def run_monitor_thread(
         internal_logger.info("Run monitor thread shut down cleanly.")
 
 
-def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
+def start_live_reduction(  # noqa: C901, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
 ) -> None:
@@ -265,7 +263,7 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
 
     This function manages the full lifecycle of live reduction across
     successive runs: initializing each run, periodically refreshing and
-    executing the reduction script, and detecting new runs to switch 
+    executing the reduction script, and detecting new runs to switch
     in-place without recursion.
 
     When file-based EPICS sample logging is used (i.e. Kafka sample-log

@@ -95,9 +95,7 @@ def seek_event_consumer_to_runstart(
     run_start_ms = run_start.StartTime()
     timestamp = datetime_from_record_timestamp(run_start_ms)
     external_logger.info("Seeking event consumer to run start: %s", timestamp)
-    topics = (
-        [f"{instrument}_events"]
-    )
+    topics = [f"{instrument}_events"]
     # Find the offset for a given time and seek to it
     for topic in topics:
         tp = TopicPartition(topic, 0)

@@ -155,9 +155,7 @@ def main(wait_timeout: float = 1.0) -> None:
             logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
             raise SampleLogError("No PVs were discovered, therefore no epics values will be streamed.")
     except Exception as exc:
-        logger.critical(
-            "Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless"
-        )
+        logger.critical("Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
         raise SampleLogError("Failed to discover any PVs, therefore no epics values will be streamed.") from exc
 
     # Use a local loop; do not spawn extra threads in the child process for simplicity
