@@ -68,6 +68,8 @@ Required/used environment variables:
 Run:
 
 - python live_data_processor/main.py
+- python live_data_processor/run_monitor.py
+  - The run monitor publishes current run state to Valkey at instrument:<INSTRUMENT>:current_run.
 
 Notes:
 

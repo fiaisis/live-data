@@ -1,3 +1,4 @@
+import json
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -51,6 +52,15 @@ def test_initialize_run_missing_start(mock_find):
 
     with pytest.raises(TopicIncompleteError):
         initialize_run(consumer, runinfo, run_start=None)
+
+
+@patch("live_data_processor.main.VALKEY_CLIENT")
+def test_get_current_run_name_from_valkey(mock_valkey_client):
+    from live_data_processor.main import _get_current_run_name_from_valkey
+
+    mock_valkey_client.get.return_value = json.dumps({"run_name": "MERLIN-003"})
+
+    assert _get_current_run_name_from_valkey() == "MERLIN-003"
 
 
 @patch("live_data_processor.main.initialize_run")

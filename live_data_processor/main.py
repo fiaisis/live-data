@@ -8,6 +8,7 @@ near real-time for a selected instrument.
 
 import contextlib
 import datetime
+import json
 import os
 import queue
 import signal
@@ -198,6 +199,40 @@ def initialize_run(
     return run_start
 
 
+def _decode_value(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _extract_run_name(run_start: RunStart | None) -> str | None:
+    if run_start is None:
+        return None
+
+    run_name = run_start.RunName()
+    if run_name is None:
+        return None
+
+    return str(_decode_value(run_name))
+
+
+def _get_current_run_name_from_valkey() -> str | None:
+    raw = VALKEY_CLIENT.get(f"instrument:{INSTRUMENT}:current_run")
+    if raw is None:
+        return None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        internal_logger.warning("Malformed current run payload in Valkey: %s", raw)
+        return None
+
+    run_name = payload.get("run_name")
+    if isinstance(run_name, bytes):
+        run_name = run_name.decode("utf-8", errors="replace")
+    return run_name if isinstance(run_name, str) else None
+
+
 def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
     """Process a single Kafka message from the events or sample-env topics.
 
@@ -223,48 +258,6 @@ def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
                 datetime.datetime.fromtimestamp(log_data.timestamp_unix_ns / 1e9, tz=datetime.UTC).isoformat(),
                 log_data.value,
             )
-
-
-def run_monitor_thread(
-    instrument: str,
-    kafka_config: dict[str, object],
-    run_signal_queue: queue.Queue,
-    shutdown_event: threading.Event,
-) -> None:
-    """
-    Background thread that continuously monitors the runInfo topic for new runs.
-    Pushes new RunStart messages to the provided thread-safe queue.
-    """
-    # Python KafkaConsumers are not thread-safe, so we instantiate a dedicated consumer
-    consumer_config = kafka_config.copy()
-    consumer_config["consumer_timeout_ms"] = 1000  # Allow loop to check shutdown_event
-
-    topic_name = f"{instrument}_runInfo"
-    consumer = KafkaConsumer(topic_name, **consumer_config)
-
-    current_run_name = None
-
-    try:
-        while not shutdown_event.is_set():
-            for message in consumer:
-                if shutdown_event.is_set():
-                    break
-
-                schema = get_schema(message.value)
-                if schema == "pl72":
-                    run_start = RunStart.GetRootAsRunStart(message.value, 0)
-                    run_name = run_start.RunName()
-                    if isinstance(run_name, bytes):
-                        run_name = run_name.decode("utf-8")
-
-                    if current_run_name != run_name:
-                        current_run_name = run_name
-                        run_signal_queue.put(run_start)
-    except Exception as e:
-        internal_logger.error("Error in run monitor thread: %s", e)
-    finally:
-        consumer.close()
-        internal_logger.info("Run monitor thread shut down cleanly.")
 
 
 def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
@@ -385,19 +378,31 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
                         SCRIPT_EXECUTION_INTERVAL,
                     )
 
-            # Check for new run
+            # Check for new run using the external run monitor when available.
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
-                latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
-                if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
-                    external_logger.info(
-                        "New run detected: RunStart message at %s",
-                        datetime_from_record_timestamp(latest_runstart.StartTime()),
-                    )
+                valkey_run_name = _get_current_run_name_from_valkey()
+                latest_runstart = None
 
-                    # Switch run_start and break out to reinitialize in-place
-                    current_run_start = latest_runstart
-                    break
+                if valkey_run_name is not None:
+                    current_run_name = _extract_run_name(current_run_start)
+                    if valkey_run_name != current_run_name:
+                        latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
+                else:
+                    latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
+
+                if latest_runstart is not None:
+                    latest_run_name = _extract_run_name(latest_runstart)
+                    current_run_name = _extract_run_name(current_run_start)
+                    if latest_run_name is not None and latest_run_name != current_run_name:
+                        external_logger.info(
+                            "New run detected: RunStart message at %s",
+                            datetime_from_record_timestamp(latest_runstart.StartTime()),
+                        )
+
+                        # Switch run_start and break out to reinitialize in-place
+                        current_run_start = latest_runstart
+                        break
 
                 run_last_checked_time = now
 
