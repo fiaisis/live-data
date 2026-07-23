@@ -46,7 +46,7 @@ VALKEY_PORT = int(os.environ.get("VALKEY_PORT", "6379"))
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 STREAM_KEY = f"instrument:{INSTRUMENT}:epics_stream"
 
-internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
+logger = logging.getLogger(f"internal_{INSTRUMENT}")
 
 # EPICS configuration (must be set before any EPICS calls)
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
@@ -128,6 +128,7 @@ def init_pvs(
 
         pv_map[name] = pv
 
+    logger.info("Discovered %d PVs for sample blocks", len(pv_map))
     return pv_map
 
 
@@ -151,10 +152,10 @@ def main(wait_timeout: float = 1.0) -> None:
     try:
         pv_map = init_pvs(event_queue=event_queue, wait_timeout=wait_timeout)
         if not pv_map:
-            internal_logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+            logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
             raise SampleLogError("No PVs were discovered, therefore no epics values will be streamed.")
     except Exception as exc:
-        internal_logger.critical(
+        logger.critical(
             "Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless"
         )
         raise SampleLogError("Failed to discover any PVs, therefore no epics values will be streamed.") from exc
@@ -181,7 +182,7 @@ def main(wait_timeout: float = 1.0) -> None:
                 maxlen=10000,  # Keep only the last 10000 entries
             )
         except redis.ConnectionError:
-            internal_logger.error("Lost connection to Valkey, Retrying...")
+            logger.error("Lost connection to Valkey, Retrying...")
             time.sleep(1)
         except Exception as exc:
             raise SampleLogError("Failed to write to Valkey stream.") from exc
