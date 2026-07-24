@@ -313,8 +313,8 @@ def start_live_reduction(  # noqa: C901, PLR0915
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
             process_message(message)
-            # Optional: Log lag every 1000 messages to avoid spamming the broker
-            if message.offset % 1000 == 0:
+            # Optional: Log lag every 100000 messages to avoid spamming the broker
+            if message.offset % 100000 == 0:
                 lags = get_consumer_lag(events_consumer)
                 total_lag = sum(lags.values())
                 internal_logger.info(f"Current Kafka Lag: {total_lag} messages")

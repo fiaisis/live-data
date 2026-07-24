@@ -355,17 +355,11 @@ def setup_deployment(
 
     epics_streamer_container = V1Container(
         name=f"epics-streamer-{instrument}",
-        command=["python", "/epics_streamer.py"],
+        command=["python", "live_data_processor/epics_streamer.py"],
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
         resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "128Gi"}),
-        volume_mounts=[
-            V1VolumeMount(name="ceph-mount", mount_path="/output"),
-            V1VolumeMount(name="archive-mount", mount_path="/archive"),
-        ],
         env=[
             V1EnvVar(name="INSTRUMENT", value=instrument),
-            V1EnvVar(name="GITHUB_API_TOKEN", value=GITHUB_API_TOKEN),
-            V1EnvVar(name="FIA_API_URL", value=FIA_API_URL),
             V1EnvVar(name="VALKEY_HOST", value=VALKEY_HOST),
             V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
         ],

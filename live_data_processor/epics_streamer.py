@@ -143,7 +143,7 @@ def _format_timestamp(timestamp_ns: int) -> str:
 
 def main(wait_timeout: float = 1.0) -> None:
     """
-    Child process entrypoint: clears file, initialises PVs and drains the queue to file.
+    Main loop for EPICS streaming.
     The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
     """
     # Per-process state lives here
