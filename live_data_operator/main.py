@@ -416,7 +416,7 @@ def start_live_data_processor(instrument: str) -> None:
     kopf.adopt(body)
 
     logger.info("Creating Deployment for %s LiveDataProcessor...", instrument)
-    
+
     try:
         AppsV1Api().create_namespaced_deployment(namespace=CEPH_CREDS_SECRET_NAMESPACE, body=body)
     except ApiException as exc:
