@@ -354,7 +354,7 @@ def setup_deployment(
 
     epics_streamer_container = V1Container(
         name=f"epics-streamer-{instrument}",
-        command=["python", "live_data_processor/epics_streamer.py"],
+        command=["python", "epics_streamer.py"],
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
         resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "128Gi"}),
         env=[
