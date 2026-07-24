@@ -415,6 +415,8 @@ def start_live_data_processor(instrument: str) -> None:
     body = ApiClient().sanitize_for_serialization(body)  # serialize so kopf may adopt it
     kopf.adopt(body)
 
+    logger.info("Creating Deployment for %s LiveDataProcessor...", instrument)
+    
     try:
         AppsV1Api().create_namespaced_deployment(namespace=CEPH_CREDS_SECRET_NAMESPACE, body=body)
     except ApiException as exc:
