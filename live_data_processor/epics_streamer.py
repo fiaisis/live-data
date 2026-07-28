@@ -33,8 +33,8 @@ import os
 import queue
 import time
 import zlib
-from typing import Any
 from contextlib import suppress
+from typing import Any
 
 import redis
 from epics import PV, caget
