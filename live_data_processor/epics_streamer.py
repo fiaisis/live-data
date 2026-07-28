@@ -200,25 +200,18 @@ def main(wait_timeout: float = 1.0) -> None:
                 maxlen=10000,  # Keep only the last 10000 entries
             )
         except Exception as exc:
-            # Some redis clients expose ConnectionError under different names/locations
-            # (e.g. redis.ConnectionError vs redis.exceptions.ConnectionError).  Be robust
-            # and treat any exception with class name 'ConnectionError' as transient so
-            # the loop will log and sleep before retrying.
-            exc_class_name = getattr(exc, "__class__", type(exc)).__name__
+            # Determine if this is a connection-related error from redis. Different
+            # redis client implementations may expose the exception under different
+            # symbols, and some test doubles may raise generic Exceptions — be explicit
+            # about what should be treated as a transient connection failure.
             conn_exc = getattr(redis, "ConnectionError", None)
-            # Guard against environments where redis.ConnectionError might be an alias for
-            # a very broad base class (e.g. Exception). Only treat as a connection error if
-            # the redis.ConnectionError symbol is a more specific exception class than
-            # Exception/BaseException, or if the exception class name clearly indicates a
-            # connection-related error.
-            is_conn_error = False
-            if conn_exc is not None and conn_exc not in (Exception, BaseException):
-                if isinstance(exc, conn_exc):
-                    is_conn_error = True
-            elif exc_class_name == "ConnectionError":
-                is_conn_error = True
 
-            if is_conn_error:
+            # Treat as connection error if it's an instance of the redis ConnectionError
+            # or if the exception class name is clearly 'ConnectionError' (covers some
+            # mocked or vendored implementations).
+            if (conn_exc is not None and isinstance(exc, conn_exc)) or (
+                getattr(exc, "__class__", type(exc)).__name__ == "ConnectionError"
+            ):
                 _get_logger().error("Lost connection to Valkey, Retrying...")
                 # Best-effort sleep; suppress any errors to avoid stopping the streamer
                 with suppress(Exception):
@@ -226,6 +219,7 @@ def main(wait_timeout: float = 1.0) -> None:
                 continue
 
             # Non-connection errors are fatal for writing to Valkey
+            _get_logger().exception("Failed to write to Valkey stream.")
             raise SampleLogError("Failed to write to Valkey stream.") from exc
 
 
