@@ -39,6 +39,7 @@ import redis
 from epics import PV, caget
 
 from live_data_processor.exceptions import SampleLogError
+from live_data_processor.loggers import setup_loggers
 
 INSTRUMENT = os.environ.get("INSTRUMENT", os.environ.get("INSTRUMENT_NAME", "Unknown Instrument")).upper()
 VALKEY_HOST = os.environ.get("VALKEY_HOST", "localhost")
@@ -46,7 +47,8 @@ VALKEY_PORT = int(os.environ.get("VALKEY_PORT", "6379"))
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 STREAM_KEY = f"instrument:{INSTRUMENT}:epics_stream"
 
-logger = logging.getLogger(f"internal_{INSTRUMENT}")
+# Placeholder logger; will be replaced by setup_loggers() in main()
+logger = logging.getLogger("epics_streamer_placeholder")
 
 # EPICS configuration (must be set before any EPICS calls)
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
@@ -68,7 +70,8 @@ def dehex_and_decompress(value: bytes) -> bytes:
 
 def _load_block_names() -> list[str]:
     """Fetch and parse block names from BLOCKSERVER once."""
-    raw = bytes(caget("IN:MERLIN:CS:BLOCKSERVER:BLOCKNAMES"))
+    instrument = INSTRUMENT
+    raw = bytes(caget(f"IN:{instrument}:CS:BLOCKSERVER:BLOCKNAMES"))
     decoded = dehex_and_decompress(raw).decode()
     return [n.replace("[", "").replace("]", "").replace(" ", "").replace('"', "") for n in decoded.split(",")]
 
@@ -87,7 +90,7 @@ def _make_monitor_callback(event_queue: "queue.Queue[EventT]"):
         if pvname is None:
             return
 
-        # pvname expected: "IN:MERLIN:CS:SB:<BLOCK_NAME>"
+        # pvname expected: "IN:<INSTRUMENT>:CS:SB:<BLOCK_NAME>"
         try:
             block_name = pvname.rsplit(":", 1)[-1]
         except Exception:
@@ -111,11 +114,14 @@ def init_pvs(
     """
     block_names = _load_block_names()
     pv_map: dict[str, PV] = {}
+    instrument = INSTRUMENT
+
+    logger.info("Discovered %d sample blocks for instrument %s", len(block_names), instrument)
 
     callback = _make_monitor_callback(event_queue)
 
     for name in block_names:
-        pvname = f"IN:MERLIN:CS:SB:{name}"
+        pvname = f"IN:{instrument}:CS:SB:{name}"
         pv = PV(
             pvname,
             auto_monitor=True,
@@ -146,8 +152,15 @@ def main(wait_timeout: float = 1.0) -> None:
     Main loop for EPICS streaming.
     The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
     """
+    # Configure logging for this instrument so messages appear in container logs and Valkey
+    internal_logger, external_logger, _ = setup_loggers(INSTRUMENT)
+    global logger
+    logger = internal_logger
+
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()
+
+    logger.info("Starting EPICS streamer for instrument %s", INSTRUMENT)
 
     try:
         pv_map = init_pvs(event_queue=event_queue, wait_timeout=wait_timeout)
