@@ -34,6 +34,7 @@ import queue
 import time
 import zlib
 from typing import Any
+from contextlib import suppress
 
 import redis
 from epics import PV, caget
@@ -205,14 +206,25 @@ def main(wait_timeout: float = 1.0) -> None:
             # the loop will log and sleep before retrying.
             exc_class_name = getattr(exc, "__class__", type(exc)).__name__
             conn_exc = getattr(redis, "ConnectionError", None)
-            if (conn_exc is not None and isinstance(exc, conn_exc)) or exc_class_name == "ConnectionError":
+            # Guard against environments where redis.ConnectionError might be an alias for
+            # a very broad base class (e.g. Exception). Only treat as a connection error if
+            # the redis.ConnectionError symbol is a more specific exception class than
+            # Exception/BaseException, or if the exception class name clearly indicates a
+            # connection-related error.
+            is_conn_error = False
+            if conn_exc is not None and conn_exc not in (Exception, BaseException):
+                if isinstance(exc, conn_exc):
+                    is_conn_error = True
+            elif exc_class_name == "ConnectionError":
+                is_conn_error = True
+
+            if is_conn_error:
                 _get_logger().error("Lost connection to Valkey, Retrying...")
-                try:
+                # Best-effort sleep; suppress any errors to avoid stopping the streamer
+                with suppress(Exception):
                     time.sleep(1)
-                except Exception:
-                    # Ensure that logging failures do not stop the streamer
-                    pass
                 continue
+
             # Non-connection errors are fatal for writing to Valkey
             raise SampleLogError("Failed to write to Valkey stream.") from exc
 
