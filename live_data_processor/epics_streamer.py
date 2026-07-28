@@ -207,11 +207,11 @@ def main(wait_timeout: float = 1.0) -> None:
             conn_exc = getattr(redis, "ConnectionError", None)
 
             # Treat as connection error if it's an instance of the redis ConnectionError
-            # or if the exception class name is clearly 'ConnectionError' (covers some
-            # mocked or vendored implementations).
-            if (conn_exc is not None and isinstance(exc, conn_exc)) or (
-                getattr(exc, "__class__", type(exc)).__name__ == "ConnectionError"
-            ):
+            # or if the exception class name indicates a connection-related failure
+            # (covers some mocked or vendored implementations that may use different
+            # exception classes but keep 'Connection' in the name).
+            exc_class_name = getattr(exc, "__class__", type(exc)).__name__
+            if (conn_exc is not None and isinstance(exc, conn_exc)) or ("Connection" in exc_class_name):
                 _get_logger().error("Lost connection to Valkey, Retrying...")
                 # Best-effort sleep; suppress any errors to avoid stopping the streamer
                 with suppress(Exception):
