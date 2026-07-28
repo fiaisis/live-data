@@ -194,10 +194,22 @@ def main(wait_timeout: float = 1.0) -> None:
                 },
                 maxlen=10000,  # Keep only the last 10000 entries
             )
-        except redis.ConnectionError:
-            _get_logger().error("Lost connection to Valkey, Retrying...")
-            time.sleep(1)
         except Exception as exc:
+            # Some redis clients expose ConnectionError under different names/locations
+            # (e.g. redis.ConnectionError vs redis.exceptions.ConnectionError).  Be robust
+            # and treat any exception with class name 'ConnectionError' as transient so
+            # the loop will log and sleep before retrying.
+            exc_class_name = getattr(exc, "__class__", type(exc)).__name__
+            conn_exc = getattr(redis, "ConnectionError", None)
+            if (conn_exc is not None and isinstance(exc, conn_exc)) or exc_class_name == "ConnectionError":
+                _get_logger().error("Lost connection to Valkey, Retrying...")
+                try:
+                    time.sleep(1)
+                except Exception:
+                    # Ensure that logging failures do not stop the streamer
+                    pass
+                continue
+            # Non-connection errors are fatal for writing to Valkey
             raise SampleLogError("Failed to write to Valkey stream.") from exc
 
 
