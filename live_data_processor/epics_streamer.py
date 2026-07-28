@@ -47,8 +47,12 @@ VALKEY_PORT = int(os.environ.get("VALKEY_PORT", "6379"))
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 STREAM_KEY = f"instrument:{INSTRUMENT}:epics_stream"
 
-# Placeholder logger; will be replaced by setup_loggers() in main()
-logger = logging.getLogger("epics_streamer_placeholder")
+def _get_logger() -> logging.Logger:
+    """Return the configured internal logger for this instrument.
+
+    setup_loggers(...) must be called prior to use to ensure handlers are attached.
+    """
+    return logging.getLogger(f"internal_{INSTRUMENT}")
 
 # EPICS configuration (must be set before any EPICS calls)
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
@@ -116,7 +120,7 @@ def init_pvs(
     pv_map: dict[str, PV] = {}
     instrument = INSTRUMENT
 
-    logger.info("Discovered %d sample blocks for instrument %s", len(block_names), instrument)
+    _get_logger().info("Discovered %d sample blocks for instrument %s", len(block_names), instrument)
 
     callback = _make_monitor_callback(event_queue)
 
@@ -134,7 +138,7 @@ def init_pvs(
 
         pv_map[name] = pv
 
-    logger.info("Discovered %d PVs for sample blocks", len(pv_map))
+    _get_logger().info("Discovered %d PVs for sample blocks", len(pv_map))
     return pv_map
 
 
@@ -154,21 +158,19 @@ def main(wait_timeout: float = 1.0) -> None:
     """
     # Configure logging for this instrument so messages appear in container logs and Valkey
     internal_logger, external_logger, _ = setup_loggers(INSTRUMENT)
-    global logger
-    logger = internal_logger
 
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()
 
-    logger.info("Starting EPICS streamer for instrument %s", INSTRUMENT)
+    _get_logger().info("Starting EPICS streamer for instrument %s", INSTRUMENT)
 
     try:
         pv_map = init_pvs(event_queue=event_queue, wait_timeout=wait_timeout)
         if not pv_map:
-            logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+            _get_logger().critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
             raise SampleLogError("No PVs were discovered, therefore no epics values will be streamed.")
     except Exception as exc:
-        logger.critical("Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+        _get_logger().critical("Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
         raise SampleLogError("Failed to discover any PVs, therefore no epics values will be streamed.") from exc
 
     # Use a local loop; do not spawn extra threads in the child process for simplicity
@@ -193,7 +195,7 @@ def main(wait_timeout: float = 1.0) -> None:
                 maxlen=10000,  # Keep only the last 10000 entries
             )
         except redis.ConnectionError:
-            logger.error("Lost connection to Valkey, Retrying...")
+            _get_logger().error("Lost connection to Valkey, Retrying...")
             time.sleep(1)
         except Exception as exc:
             raise SampleLogError("Failed to write to Valkey stream.") from exc
