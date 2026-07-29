@@ -39,7 +39,10 @@ def test_main_valkey_xadd(mock_init_pvs, valkey_client_mock):
     ]
 
     # Prevent setup_loggers from creating Valkey handlers that use queue.Queue
-    with patch("live_data_processor.epics_streamer.setup_loggers", return_value=(MagicMock(), MagicMock(), "stream")):
+    with patch(
+        "live_data_processor.epics_streamer.setup_loggers",
+        return_value=(MagicMock(), MagicMock(), "stream"),
+    ):
         with patch(
             "live_data_processor.epics_streamer.queue.Queue", return_value=mock_queue
         ):
@@ -72,7 +75,10 @@ def test_main_valkey_connection_error_handled(mock_init_pvs, valkey_client_mock)
     valkey_client_mock.xadd.side_effect = redis.ConnectionError("Connection lost")
 
     # Prevent setup_loggers from creating Valkey handlers that use queue.Queue
-    with patch("live_data_processor.epics_streamer.setup_loggers", return_value=(MagicMock(), MagicMock(), "stream")):
+    with patch(
+        "live_data_processor.epics_streamer.setup_loggers",
+        return_value=(MagicMock(), MagicMock(), "stream"),
+    ):
         with patch(
             "live_data_processor.epics_streamer.queue.Queue", return_value=mock_queue
         ):
@@ -96,9 +102,14 @@ def test_main_valkey_other_error_raises(mock_init_pvs, valkey_client_mock):
     valkey_client_mock.xadd.side_effect = Exception("Unexpected error")
 
     # Prevent setup_loggers from creating Valkey handlers that use queue.Queue
-    with patch("live_data_processor.epics_streamer.setup_loggers", return_value=(MagicMock(), MagicMock(), "stream")):
+    with patch(
+        "live_data_processor.epics_streamer.setup_loggers",
+        return_value=(MagicMock(), MagicMock(), "stream"),
+    ):
         with patch(
             "live_data_processor.epics_streamer.queue.Queue", return_value=mock_queue
         ):
-            with pytest.raises(SampleLogError, match="Failed to write to Valkey stream"):
+            with pytest.raises(
+                SampleLogError, match="Failed to write to Valkey stream"
+            ):
                 main()
