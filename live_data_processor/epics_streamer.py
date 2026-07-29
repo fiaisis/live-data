@@ -178,6 +178,7 @@ def main(wait_timeout: float = 1.0) -> None:
         )
         raise SampleLogError("Failed to discover any PVs, therefore no epics values will be streamed.") from exc
 
+    _get_logger().info("EPICS streamer initialized, writing to Valkey stream %s", STREAM_KEY)
     # Use a local loop; do not spawn extra threads in the child process for simplicity
     while True:
         try:
