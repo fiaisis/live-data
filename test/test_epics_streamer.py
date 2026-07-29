@@ -26,8 +26,8 @@ def test_main_valkey_xadd(mock_valkey_client, mock_init_pvs):
         with pytest.raises(Exception, match="Break loop"):
             main()
 
-    mock_valkey_client.xadd.assert_called_once()
-    args, kwargs = mock_valkey_client.xadd.call_args
+    mock_valkey_client.return_value.xadd.assert_called_once()
+    args, kwargs = mock_valkey_client.return_value.xadd.call_args
     # args[0] is STREAM_KEY, args[1] is the fields dict
     assert "epics_stream" in args[0]
     fields = args[1]
