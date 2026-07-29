@@ -161,6 +161,12 @@ def main(wait_timeout: float = 1.0) -> None:
     """
     # Configure logging for this instrument so messages appear in container logs and Valkey
     internal_logger, external_logger, _ = setup_loggers(INSTRUMENT)
+    try:
+        # If tests patched VALKEY_CLIENT with a MagicMock instance this leaves it intact.
+        valkey_client = VALKEY_CLIENT if not callable(VALKEY_CLIENT) else VALKEY_CLIENT()
+    except Exception:
+        # Fallback to using the module object directly
+        valkey_client = VALKEY_CLIENT
 
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()
@@ -190,7 +196,7 @@ def main(wait_timeout: float = 1.0) -> None:
 
         ts_str = _format_timestamp(timestamp_ns)
         try:
-            VALKEY_CLIENT.xadd(
+            valkey_client.xadd(
                 STREAM_KEY,
                 {
                     "block_name": block_name,
