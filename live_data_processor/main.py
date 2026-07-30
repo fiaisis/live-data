@@ -208,8 +208,6 @@ def process_message(message: Any) -> None:
     if schema == "ev42":
         events = EventMessage.GetRootAsEventMessage(message.value, 0)
         process_events(events)
-    else:
-        internal_logger.info("Received message with unhandled schema: %s", schema)
 
 
 def run_monitor_thread(
