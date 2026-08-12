@@ -85,9 +85,10 @@ def _get_base_kafka_config() -> dict[str, Any]:
     return {
         "bootstrap_servers": f"{KAFKA_IP}:{KAFKA_PORT}",
         "auto_offset_reset": "latest",
-        "enable_auto_commit": False,
+        "enable_auto_commit": True,
         "request_timeout_ms": 60000,
         "session_timeout_ms": 60000,
+        "security_protocol": "PLAINTEXT",
         "api_version_auto_timeout_ms": 60000,
     }
 
