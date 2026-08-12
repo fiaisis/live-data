@@ -81,7 +81,7 @@ def _get_valkey_client() -> redis.Redis:
     return redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 
 
-def _get_base_kafka_config() -> dict[str, Any]:
+def _get_base_kafka_config() -> dict[str, object]:
     return {
         "bootstrap_servers": f"{KAFKA_IP}:{KAFKA_PORT}",
         "auto_offset_reset": "latest",
