@@ -4,7 +4,6 @@ import os
 import queue
 import sys
 import threading
-import time
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
 
@@ -72,7 +71,6 @@ class ValkeyStreamHandler(logging.Handler):
         except Exception:
             # Avoid any exception escaping from emit
             self.handleError(record)
-
 
     def close(self) -> None:
         """Stop the worker thread and flush remaining messages (best-effort)."""
