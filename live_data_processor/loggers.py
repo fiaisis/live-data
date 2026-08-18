@@ -47,8 +47,6 @@ class ValkeyStreamHandler(logging.Handler):
         # Delivery retry configuration (exposed for testing)
         self.max_delivery_attempts = max_delivery_attempts
         self.backoff_base = backoff_base
-        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name=f"ValkeyWriter-{stream_key}")
-        self._worker_thread.start()
 
     def emit(self, record: logging.LogRecord) -> None:
         """
@@ -75,43 +73,10 @@ class ValkeyStreamHandler(logging.Handler):
             # Avoid any exception escaping from emit
             self.handleError(record)
 
-    def _worker_loop(self) -> None:
-        """Background worker that delivers queued log records to Redis with retries."""
-        backoff_base = self.backoff_base
-        while not self._stop_event.is_set():
-            try:
-                msg, level, record_obj = self._queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-
-            # Attempt to deliver with retry/backoff
-            attempt = 0
-            while True:
-                try:
-                    # Use xadd with maxlen to trim the stream server-side
-                    self.client.xadd(self.stream_key, {"msg": msg, "level": level}, maxlen=self.maxlen)
-                    break
-                except Exception:
-                    attempt += 1
-                    # On repeated failures, wait progressively longer, but remain responsive to shutdown
-                    sleep_time = min(5.0, backoff_base * (2 ** (attempt - 1)))
-                    with suppress(Exception):
-                        time.sleep(sleep_time)
-                    # After a number of attempts, if still failing, emit to stderr and drop this record
-                    if attempt >= self.max_delivery_attempts:
-                        # Best-effort stderr reporting
-                        with suppress(Exception):
-                            sys.stderr.write(f"[VALKEY ERR] dropping log after repeated failures: {msg}\n")
-                        # Notify logging framework about the failure for visibility
-                        with suppress(Exception):
-                            self.handleError(record_obj)
-                        break
 
     def close(self) -> None:
         """Stop the worker thread and flush remaining messages (best-effort)."""
         self._stop_event.set()
-        # Wait briefly for worker to exit
-        self._worker_thread.join(timeout=2)
         # Drain remaining items to stderr to avoid silent loss
         while True:
             try:
