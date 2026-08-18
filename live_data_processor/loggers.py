@@ -58,6 +58,7 @@ class ValkeyStreamHandler(logging.Handler):
                 # If queue is full, drop the oldest item to make room (discarding oldest is preferable
                 # to blocking or crashing the application).
                 self._queue.put(entry, block=False)
+                self.client.xadd(self.stream_key, {"msg": msg, "level": record.levelname}, maxlen=self.maxlen)
             except queue.Full:
                 with suppress(Exception):
                     # Remove one oldest item then enqueue current
