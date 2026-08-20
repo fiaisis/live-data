@@ -74,7 +74,7 @@ class ValkeyStreamHandler(logging.Handler):
             self.handleError(record)
 
     def close(self) -> None:
-        """Stop the worker thread and flush remaining messages (best-effort)."""
+        """Stop and flush remaining messages (best-effort)."""
         self._stop_event.set()
         # Drain remaining items to stderr to avoid silent loss
         while True:
