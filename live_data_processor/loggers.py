@@ -73,18 +73,6 @@ class ValkeyStreamHandler(logging.Handler):
             # Avoid any exception escaping from emit
             self.handleError(record)
 
-    def close(self) -> None:
-        """Stop and flush remaining messages (best-effort)."""
-        self._stop_event.set()
-        # Drain remaining items to stderr to avoid silent loss
-        while True:
-            try:
-                msg, _level, _record = self._queue.get(block=False)
-                with suppress(Exception):
-                    sys.stderr.write(f"[VALKEY DRAIN] {msg}\n")
-            except queue.Empty:
-                break
-        super().close()
 
 
 def setup_loggers(instrument_name: str) -> tuple[logging.Logger, logging.Logger, str]:
