@@ -74,7 +74,6 @@ class ValkeyStreamHandler(logging.Handler):
             self.handleError(record)
 
 
-
 def setup_loggers(instrument_name: str) -> tuple[logging.Logger, logging.Logger, str]:
     """
     Configures and returns the internal and external loggers for a specific instrument.
