@@ -156,7 +156,6 @@ def main(wait_timeout: float = 1.0) -> None:
     The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
     """
     # Configure logging for this instrument so messages appear in container logs and Valkey
-    
 
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()
