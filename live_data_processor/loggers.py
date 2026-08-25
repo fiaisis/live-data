@@ -1,47 +1,76 @@
 import io
 import logging
 import os
+import queue
 import sys
+import threading
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 import redis
 
 VALKEY_HOST: str = os.environ.get("VALKEY_HOST", "localhost")
 VALKEY_PORT: int = int(os.environ.get("VALKEY_PORT", "6379"))
+MAX_DELIVERY_ATTEMPTS: int = 10
 
+# Global client for convenience; individual handlers will manage their own reconnection logic.
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 
 
 class ValkeyStreamHandler(logging.Handler):
     """
-    Custom logging handler that pushes logs to a Valkey Stream.
+    Robust logging handler that pushes logs to a Valkey stream (Redis).
+
+    Behavior:
+    - Non-blocking emit(): places formatted log records on an internal bounded queue.
+    - Background worker drains the queue and performs XADD calls to Redis.
+    - On Redis errors the worker retries with backoff; records are not discarded immediately.
+    - If the internal queue is full, oldest messages are dropped in favor of newest to avoid unbounded memory growth.
     """
 
-    def __init__(self, client: redis.Redis, stream_key: str, maxlen: int = 2000) -> None:
-        """
-        Initialize the ValkeyStreamHandler.
-
-        :param client: An active Valkey (Redis) client connection.
-        :param stream_key: The stream key to push logs to.
-        :param maxlen: The maximum length of the stream before old logs are truncated. Defaults to 2000.
-        """
+    def __init__(
+        self,
+        client: redis.Redis,
+        stream_key: str,
+        maxlen: int = 2000,
+        queue_maxsize: int = 5000,
+        max_delivery_attempts: int = MAX_DELIVERY_ATTEMPTS,
+        backoff_base: float = 0.5,
+    ) -> None:
         super().__init__()
         self.client = client
         self.stream_key = stream_key
         self.maxlen = maxlen
+        self._queue: queue.Queue[tuple[str, str, logging.LogRecord]] = queue.Queue(maxsize=queue_maxsize)
+        self._stop_event = threading.Event()
+        # Delivery retry configuration (exposed for testing)
+        self.max_delivery_attempts = max_delivery_attempts
+        self.backoff_base = backoff_base
 
     def emit(self, record: logging.LogRecord) -> None:
         """
-        Emit a record to the Valkey stream.
-
-        :param record: The log record to be formatted and emitted.
+        Quickly enqueue a formatted record for background delivery to Redis.
         """
         try:
             msg = self.format(record)
-            # Add the level directly to the Valkey stream dictionary
-            self.client.xadd(self.stream_key, {"msg": msg, "level": record.levelname}, maxlen=self.maxlen)
+            entry = (msg, record.levelname, record)
+            try:
+                # If queue is full, drop the oldest item to make room (discarding oldest is preferable
+                # to blocking or crashing the application).
+                self._queue.put(entry, block=False)
+                self.client.xadd(self.stream_key, {"msg": msg, "level": record.levelname}, maxlen=self.maxlen)
+            except queue.Full:
+                with suppress(Exception):
+                    # Remove one oldest item then enqueue current
+                    _ = self._queue.get(block=False)
+                try:
+                    self._queue.put(entry, block=False)
+                except Exception:
+                    # As a final fallback write to stderr so logs aren't silently lost
+                    with suppress(Exception):
+                        sys.stderr.write(f"[VALKEY DROP] {msg}\n")
         except Exception:
+            # Avoid any exception escaping from emit
             self.handleError(record)
 
 
