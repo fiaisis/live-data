@@ -40,7 +40,6 @@ import redis
 from epics import PV, caget
 
 from live_data_processor.exceptions import SampleLogError
-from live_data_processor.loggers import setup_loggers
 
 INSTRUMENT = os.environ.get("INSTRUMENT", os.environ.get("INSTRUMENT_NAME", "Unknown Instrument")).upper()
 VALKEY_HOST = os.environ.get("VALKEY_HOST", "localhost")
@@ -49,7 +48,11 @@ VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses
 STREAM_KEY = f"instrument:{INSTRUMENT}:epics_stream"
 
 logger = logging.getLogger(f"internal_{INSTRUMENT}")
-
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s - INTERNAL - %(message)s"))
+    logger.addHandler(_handler)
 
 # EPICS configuration (must be set before any EPICS calls)
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
@@ -153,7 +156,7 @@ def main(wait_timeout: float = 1.0) -> None:
     The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
     """
     # Configure logging for this instrument so messages appear in container logs and Valkey
-    internal_logger, external_logger, _ = setup_loggers(INSTRUMENT)
+    
 
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()
