@@ -38,10 +38,10 @@ def test_main_valkey_xadd(mock_init_pvs, valkey_client_mock):
         Exception("Break loop"),
     ]
 
-    # Prevent setup_loggers from creating Valkey handlers that use queue.Queue
+    # Prevent logger from creating Valkey handlers that use queue.Queue
     with patch(
-        "live_data_processor.epics_streamer.setup_loggers",
-        return_value=(MagicMock(), MagicMock(), "stream"),
+        "live_data_processor.epics_streamer.logger",
+        return_value=MagicMock(),
     ):
         with patch(
             "live_data_processor.epics_streamer.queue.Queue", return_value=mock_queue
@@ -74,10 +74,10 @@ def test_main_valkey_connection_error_handled(mock_init_pvs, valkey_client_mock)
     # Force XADD to raise a ConnectionError, which should be caught and sleep for 1 sec
     valkey_client_mock.xadd.side_effect = redis.ConnectionError("Connection lost")
 
-    # Prevent setup_loggers from creating Valkey handlers that use queue.Queue
+    # Prevent logger from creating Valkey handlers that use queue.Queue
     with patch(
-        "live_data_processor.epics_streamer.setup_loggers",
-        return_value=(MagicMock(), MagicMock(), "stream"),
+        "live_data_processor.epics_streamer.logger",
+        return_value=MagicMock(),
     ):
         with patch(
             "live_data_processor.epics_streamer.queue.Queue", return_value=mock_queue
@@ -101,10 +101,10 @@ def test_main_valkey_other_error_raises(mock_init_pvs, valkey_client_mock):
 
     valkey_client_mock.xadd.side_effect = Exception("Unexpected error")
 
-    # Prevent setup_loggers from creating Valkey handlers that use queue.Queue
+    # Prevent logger from creating Valkey handlers that use queue.Queue
     with patch(
-        "live_data_processor.epics_streamer.setup_loggers",
-        return_value=(MagicMock(), MagicMock(), "stream"),
+        "live_data_processor.epics_streamer.logger",
+        return_value=MagicMock(),
     ):
         with patch(
             "live_data_processor.epics_streamer.queue.Queue", return_value=mock_queue
