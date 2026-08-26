@@ -42,7 +42,7 @@ if not logger.hasHandlers():
 def _decode_value(value: Any) -> Any:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
-    if isinstance(value, (str, int, float, bool)) or value is None:
+    if isinstance(value, (str | int | float | bool)) or value is None:
         return value
     return str(value)
 
@@ -119,7 +119,7 @@ def _is_run_start_message(message: Any) -> bool:
     return get_schema(message.value) == "pl72"
 
 
-def main() -> None:
+def main() -> None: #noqa: PLR0912, C901
     logger.info("Starting Run Monitor for %s on topic %s", INSTRUMENT, RUNINFO_TOPIC)
     valkey_client = _get_valkey_client()
 
