@@ -33,13 +33,10 @@ CURRENT_RUN_KEY = f"instrument:{INSTRUMENT}:current_run"
 
 
 logger = logging.getLogger("live_data_processor.run_monitor")
-
-
-def _configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+if not logger.hasHandlers():
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s - INTERNAL - %(message)s"))
+    logger.addHandler(_handler)
 
 
 def _decode_value(value: Any) -> Any:
@@ -123,7 +120,6 @@ def _is_run_start_message(message: Any) -> bool:
 
 
 def main() -> None:
-    _configure_logging()
     logger.info("Starting Run Monitor for %s on topic %s", INSTRUMENT, RUNINFO_TOPIC)
     valkey_client = _get_valkey_client()
 
