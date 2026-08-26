@@ -10,7 +10,6 @@ Mantid data reduction loop.
 import json
 import logging
 import os
-import time
 from typing import Any
 
 import redis
@@ -119,7 +118,7 @@ def _is_run_start_message(message: Any) -> bool:
     return get_schema(message.value) == "pl72"
 
 
-def main() -> None: #noqa: PLR0912, C901
+def main() -> None:  # noqa: PLR0912, C901
     logger.info("Starting Run Monitor for %s on topic %s", INSTRUMENT, RUNINFO_TOPIC)
     valkey_client = _get_valkey_client()
 

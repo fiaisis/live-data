@@ -10,7 +10,6 @@ import contextlib
 import datetime
 import json
 import os
-import queue
 import signal
 import threading
 import time
