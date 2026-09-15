@@ -337,6 +337,7 @@ def setup_deployment(
 
     container = V1Container(
         name=f"livedataprocessor-{instrument}",
+        command=["python", "main.py"],
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
         resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "128Gi"}),
         volume_mounts=[
