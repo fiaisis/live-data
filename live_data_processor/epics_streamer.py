@@ -145,7 +145,6 @@ def _format_timestamp(timestamp_ns: int) -> str:
     """
     Format timestamp to ISO 8601 using UTC timezone.
     """
-    # Use the standard library's timezone object for UTC
     dt = datetime.datetime.fromtimestamp(timestamp_ns / 1e9, tz=datetime.UTC)
     return dt.isoformat()
 
@@ -155,8 +154,6 @@ def main(wait_timeout: float = 1.0) -> None:
     Main loop for EPICS streaming.
     The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
     """
-    # Configure logging for this instrument so messages appear in container logs and Valkey
-
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()
 

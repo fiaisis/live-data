@@ -330,9 +330,9 @@ def start_live_reduction(  # noqa: C901, PLR0915
                     stream_key = f"instrument:{INSTRUMENT}:epics_stream"
 
                     # Fetch all events currently in the stream
-                    events = VALKEY_CLIENT.xrange(stream_key, "-", "+")
+                    epics_logs = VALKEY_CLIENT.xrange(stream_key, "-", "+")
 
-                    for _, data in events:
+                    for _, data in epics_logs:
                         source = data.get("block_name")
                         value = data.get("value")
                         timestamp = data.get("timestamp")
