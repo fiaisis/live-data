@@ -62,8 +62,10 @@ def dehex_and_decompress(value: bytes) -> bytes:
     :param value: The string to dehex and decompress
     :return: The decompressed bytes
     """
-    return zlib.decompress(binascii.unhexlify(value))
-
+    # Strip null terminators and trailing whitespace
+    clean_value = value.strip(b'\x00 \r\n')
+    temp = binascii.unhexlify(clean_value)
+    return zlib.decompress(temp)
 
 def _load_block_names() -> list[str]:
     """Fetch and parse block names from BLOCKSERVER once."""
