@@ -71,12 +71,12 @@ def dehex_and_decompress(value: bytes) -> bytes:
     """
     # Strip null terminators and trailing whitespace
     clean_value = value.strip(b"\x00 \r\n")
-    temp = binascii.unhexlify(clean_value)
-    return zlib.decompress(temp)
+    return zlib.decompress(binascii.unhexlify(clean_value))
 
 
 def _load_block_names() -> list[str]:
     """Fetch and parse block names from BLOCKSERVER once."""
+    print(caget(f"IN:{INSTRUMENT}:CS:BLOCKSERVER:BLOCKNAMES"))
     raw = bytes(caget(f"IN:{INSTRUMENT}:CS:BLOCKSERVER:BLOCKNAMES"))
     decoded = dehex_and_decompress(raw).decode()
     return [n.replace("[", "").replace("]", "").replace(" ", "").replace('"', "") for n in decoded.split(",")]
