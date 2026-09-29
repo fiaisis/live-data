@@ -1,10 +1,11 @@
+import zlib
 from unittest.mock import MagicMock, patch
 
 import pytest
 import redis
 
 from live_data_processor.exceptions import SampleLogError
-from live_data_processor.epics_streamer import main
+from live_data_processor.epics_streamer import dehex_and_decompress, main
 
 
 @pytest.fixture
@@ -113,3 +114,17 @@ def test_main_valkey_other_error_raises(mock_init_pvs, valkey_client_mock):
                 SampleLogError, match="Failed to write to Valkey stream"
             ):
                 main()
+
+
+def test_dehex_and_decompress_strips_null_terminators_and_trailing_whitespace():
+    expected = b"block names"
+    value = zlib.compress(expected).hex().encode() + b"\x00 \r\n"
+
+    assert dehex_and_decompress(value) == expected
+
+
+def test_dehex_and_decompress_without_null_terminator():
+    expected = b"block names"
+    value = zlib.compress(expected).hex().encode()
+
+    assert dehex_and_decompress(value) == expected
