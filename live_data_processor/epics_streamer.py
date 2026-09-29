@@ -76,7 +76,6 @@ def dehex_and_decompress(value: bytes) -> bytes:
 
 def _load_block_names() -> list[str]:
     """Fetch and parse block names from BLOCKSERVER once."""
-    print(caget(f"IN:{INSTRUMENT}:CS:BLOCKSERVER:BLOCKNAMES"))
     raw = bytes(caget(f"IN:{INSTRUMENT}:CS:BLOCKSERVER:BLOCKNAMES"))
     decoded = dehex_and_decompress(raw).decode()
     return [n.replace("[", "").replace("]", "").replace(" ", "").replace('"', "") for n in decoded.split(",")]
