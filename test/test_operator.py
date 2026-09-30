@@ -87,6 +87,7 @@ def test_setup_deployment(mock_ceph_pv, mock_ceph_pvc, mock_arch_pv, mock_arch_p
 
     container = deployment.spec.template.spec.containers[0]
     assert container.name == "livedataprocessor-MERLIN"
+    assert container.command == ["python", "main.py"]
 
     env_vars = {e.name: e.value for e in container.env}
     assert env_vars["INSTRUMENT"] == "MERLIN"
