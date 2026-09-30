@@ -209,7 +209,7 @@ def process_message(message: Any) -> None:
         process_events(events)
 
 
-def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
+def start_live_reduction(  # noqa: C901, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
 ) -> None:
