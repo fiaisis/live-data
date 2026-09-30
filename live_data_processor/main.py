@@ -6,9 +6,7 @@ reduction script refresh/execute loop to process neutron event data in
 near real-time for a selected instrument.
 """
 
-import contextlib
 import datetime
-import json
 import os
 import signal
 import threading
@@ -25,7 +23,6 @@ from mantid.simpleapi import (
     AddTimeSeriesLog,
     RemoveWorkspaceHistory,
 )
-from streaming_data_types import deserialise_f144
 from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMessage
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 from streaming_data_types.utils import get_schema
@@ -198,79 +195,31 @@ def initialize_run(
     return run_start
 
 
-def _decode_value(value: Any) -> Any:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value
-
-
-def _extract_run_name(run_start: RunStart | None) -> str | None:
-    if run_start is None:
-        return None
-
-    run_name = run_start.RunName()
-    if run_name is None:
-        return None
-
-    return str(_decode_value(run_name))
-
-
-def _get_current_run_name_from_valkey() -> str | None:
-    raw = VALKEY_CLIENT.get(f"instrument:{INSTRUMENT}:current_run")
-    if raw is None:
-        return None
-
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        internal_logger.warning("Malformed current run payload in Valkey: %s", raw)
-        return None
-
-    run_name = payload.get("run_name")
-    if isinstance(run_name, bytes):
-        run_name = run_name.decode("utf-8", errors="replace")
-    return run_name if isinstance(run_name, str) else None
-
-
-def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
+def process_message(message: Any) -> None:
     """Process a single Kafka message from the events or sample-env topics.
 
-    Depending on the message schema, this will either add event data to the
-    live workspace (ev42) or, when enabled, append sample-environment logs
-    (f144) as Mantid time series logs.
+    This will add event data to the live workspace if ev42 schema is used. Other schemas are ignored.
 
     :param message: A Kafka message object with a binary payload in message.value.
-    :param kafka_sample_streaming: If True, process f144 sample log messages as well.
     :return: None
     """
     schema = get_schema(message.value)
     if schema == "ev42":
         events = EventMessage.GetRootAsEventMessage(message.value, 0)
         process_events(events)
-    elif kafka_sample_streaming and schema == "f144":
-        log_data = deserialise_f144(message.value)
-        source = log_data.source_name.replace("IN:MERLIN:CS:SB:", "").title()
-        with contextlib.suppress(TypeError):
-            AddTimeSeriesLog(
-                "lives",
-                source,
-                datetime.datetime.fromtimestamp(log_data.timestamp_unix_ns / 1e9, tz=datetime.UTC).isoformat(),
-                log_data.value,
-            )
 
 
 def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
-    kafka_sample_log_streaming: bool = False,
 ) -> None:
     """
     Run the main live data reduction loop for an instrument.
 
     This function manages the full lifecycle of live reduction across
-    successive runs: initializing each run, consuming Kafka event data,
-    periodically refreshing and executing the reduction script, and
-    detecting new runs to switch in-place without recursion.
+    successive runs: initializing each run, periodically refreshing and
+    executing the reduction script, and detecting new runs to switch
+    in-place without recursion.
 
     When file-based EPICS sample logging is used (i.e. Kafka sample-log
     streaming is disabled), it also manages the EPICS logging process,
@@ -280,12 +229,6 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
 
     :param events_consumer: Kafka consumer subscribed to the <instrument>_events topic.
     :param runinfo_consumer: Kafka consumer subscribed to the <instrument>_runInfo topic.
-    :param kafka_sample_log_streaming: If True, sample logs are consumed directly
-                                        from Kafka; otherwise EPICS logs are streamed
-                                        to file and replayed during reduction.
-    :param epics_proc: Active EPICS logging process, if any.
-    :param epics_stop_event: Stop event used to shut down the EPICS logging process.
-    :param epics_log_file: Path to the EPICS sample-log file when file-based logging is used.
     :return: None
     """
     current_run_start: RunStart | None = None
@@ -305,10 +248,9 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
             continue
 
         # Delete previous run's EPICS stream data from Valkey cache if we are using file/Valkey-based logging
-        if not kafka_sample_log_streaming:
-            epics_stream_key = f"instrument:{INSTRUMENT}:epics_stream"
-            VALKEY_CLIENT.delete(epics_stream_key)
-            internal_logger.info("Cleared Valkey EPICS stream: %s", epics_stream_key)
+        epics_stream_key = f"instrument:{INSTRUMENT}:epics_stream"
+        VALKEY_CLIENT.delete(epics_stream_key)
+        internal_logger.info("Cleared Valkey EPICS stream: %s", epics_stream_key)
 
         external_logger.info(
             "Run began at %s",
@@ -325,9 +267,9 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
 
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
-            process_message(message, kafka_sample_streaming=kafka_sample_log_streaming)
-            # Optional: Log lag every 1000 messages to avoid spamming the broker
-            if message.offset % 1000 == 0:
+            process_message(message)
+            # Optional: Log lag every 100000 messages to avoid spamming the broker
+            if message.offset % 100000 == 0:
                 lags = get_consumer_lag(events_consumer)
                 total_lag = sum(lags.values())
                 internal_logger.info(f"Current Kafka Lag: {total_lag} messages")
@@ -342,27 +284,26 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
             # Execute reduction function periodically
             if (now - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
                 try:
-                    if not kafka_sample_log_streaming:
-                        stream_key = f"instrument:{INSTRUMENT}:epics_stream"
+                    stream_key = f"instrument:{INSTRUMENT}:epics_stream"
 
-                        # Fetch all events currently in the stream
-                        events = VALKEY_CLIENT.xrange(stream_key, "-", "+")
+                    # Fetch all events currently in the stream
+                    epics_logs = VALKEY_CLIENT.xrange(stream_key, "-", "+")
 
-                        for _, data in events:
-                            source = data.get("block_name")
-                            value = data.get("value")
-                            timestamp = data.get("timestamp")
+                    for _, data in epics_logs:
+                        source = data.get("block_name")
+                        value = data.get("value")
+                        timestamp = data.get("timestamp")
 
-                            if source and value and timestamp:
-                                AddTimeSeriesLog(
-                                    LIVE_WS_NAME,
-                                    source,
-                                    timestamp,
-                                    value,
-                                )
+                        if source and value and timestamp:
+                            AddTimeSeriesLog(
+                                LIVE_WS_NAME,
+                                source,
+                                timestamp,
+                                value,
+                            )
 
-                        ws = mtd[LIVE_WS_NAME]
-                        RemoveWorkspaceHistory(ws)
+                    ws = mtd[LIVE_WS_NAME]
+                    RemoveWorkspaceHistory(ws)
                     external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
                     external_logger.info("Executing reduction script")
                     with capture_and_tee(external_logger):
@@ -377,31 +318,19 @@ def start_live_reduction(  # noqa: C901, PLR0915, PLR0912
                         SCRIPT_EXECUTION_INTERVAL,
                     )
 
-            # Check for new run using the external run monitor when available.
+            # Check for new run
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
-                valkey_run_name = _get_current_run_name_from_valkey()
-                latest_runstart = None
+                latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
+                if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
+                    external_logger.info(
+                        "New run detected: RunStart message at %s",
+                        datetime_from_record_timestamp(latest_runstart.StartTime()),
+                    )
 
-                if valkey_run_name is not None:
-                    current_run_name = _extract_run_name(current_run_start)
-                    if valkey_run_name != current_run_name:
-                        latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
-                else:
-                    latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
-
-                if latest_runstart is not None:
-                    latest_run_name = _extract_run_name(latest_runstart)
-                    current_run_name = _extract_run_name(current_run_start)
-                    if latest_run_name is not None and latest_run_name != current_run_name:
-                        external_logger.info(
-                            "New run detected: RunStart message at %s",
-                            datetime_from_record_timestamp(latest_runstart.StartTime()),
-                        )
-
-                        # Switch run_start and break out to reinitialize in-place
-                        current_run_start = latest_runstart
-                        break
+                    # Switch run_start and break out to reinitialize in-place
+                    current_run_start = latest_runstart
+                    break
 
                 run_last_checked_time = now
 
@@ -437,12 +366,10 @@ def main() -> None:
         "api_version_auto_timeout_ms": 60000,
     }
     events_consumer, runinfo_consumer = setup_consumers(INSTRUMENT, kafka_config)
-    kafka_sample_streaming = False
 
     start_live_reduction(
         events_consumer,
         runinfo_consumer,
-        kafka_sample_log_streaming=kafka_sample_streaming,
     )
 
 

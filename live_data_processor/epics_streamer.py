@@ -33,6 +33,7 @@ import os
 import queue
 import time
 import zlib
+from contextlib import suppress
 from typing import Any
 
 import redis
@@ -46,7 +47,12 @@ VALKEY_PORT = int(os.environ.get("VALKEY_PORT", "6379"))
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 STREAM_KEY = f"instrument:{INSTRUMENT}:epics_stream"
 
-internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
+logger = logging.getLogger(f"internal_{INSTRUMENT}")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s - INTERNAL - %(message)s"))
+    logger.addHandler(_handler)
 
 # EPICS configuration (must be set before any EPICS calls)
 os.environ["EPICS_CA_MAX_ARRAY_BYTES"] = "20000"
@@ -63,12 +69,14 @@ def dehex_and_decompress(value: bytes) -> bytes:
     :param value: The string to dehex and decompress
     :return: The decompressed bytes
     """
-    return zlib.decompress(binascii.unhexlify(value))
+    # Strip null terminators and trailing whitespace
+    clean_value = value.strip(b"\x00 \r\n")
+    return zlib.decompress(binascii.unhexlify(clean_value))
 
 
 def _load_block_names() -> list[str]:
     """Fetch and parse block names from BLOCKSERVER once."""
-    raw = bytes(caget("IN:MERLIN:CS:BLOCKSERVER:BLOCKNAMES"))
+    raw = bytes(caget(f"IN:{INSTRUMENT}:CS:BLOCKSERVER:BLOCKNAMES"))
     decoded = dehex_and_decompress(raw).decode()
     return [n.replace("[", "").replace("]", "").replace(" ", "").replace('"', "") for n in decoded.split(",")]
 
@@ -87,7 +95,7 @@ def _make_monitor_callback(event_queue: "queue.Queue[EventT]"):
         if pvname is None:
             return
 
-        # pvname expected: "IN:MERLIN:CS:SB:<BLOCK_NAME>"
+        # pvname expected: "IN:<INSTRUMENT>:CS:SB:<BLOCK_NAME>"
         try:
             block_name = pvname.rsplit(":", 1)[-1]
         except Exception:
@@ -111,11 +119,14 @@ def init_pvs(
     """
     block_names = _load_block_names()
     pv_map: dict[str, PV] = {}
+    instrument = INSTRUMENT
+
+    logger.info("Discovered %d sample blocks for instrument %s", len(block_names), instrument)
 
     callback = _make_monitor_callback(event_queue)
 
     for name in block_names:
-        pvname = f"IN:MERLIN:CS:SB:{name}"
+        pvname = f"IN:{instrument}:CS:SB:{name}"
         pv = PV(
             pvname,
             auto_monitor=True,
@@ -128,6 +139,7 @@ def init_pvs(
 
         pv_map[name] = pv
 
+    logger.info("Discovered %d PVs for sample blocks", len(pv_map))
     return pv_map
 
 
@@ -135,30 +147,30 @@ def _format_timestamp(timestamp_ns: int) -> str:
     """
     Format timestamp to ISO 8601 using UTC timezone.
     """
-    # Use the standard library's timezone object for UTC
     dt = datetime.datetime.fromtimestamp(timestamp_ns / 1e9, tz=datetime.UTC)
     return dt.isoformat()
 
 
 def main(wait_timeout: float = 1.0) -> None:
     """
-    Child process entrypoint: clears file, initialises PVs and drains the queue to file.
+    Main loop for EPICS streaming.
     The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
     """
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()
 
+    logger.info("Starting EPICS streamer for instrument %s", INSTRUMENT)
+
     try:
         pv_map = init_pvs(event_queue=event_queue, wait_timeout=wait_timeout)
         if not pv_map:
-            internal_logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
+            logger.critical("Discovered no PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
             raise SampleLogError("No PVs were discovered, therefore no epics values will be streamed.")
     except Exception as exc:
-        internal_logger.critical(
-            "Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless"
-        )
+        logger.critical("Failed to discover any PVs, NO EPICS VALUES WILL BE STREAMED - Reduction will be useless")
         raise SampleLogError("Failed to discover any PVs, therefore no epics values will be streamed.") from exc
 
+    logger.info("EPICS streamer initialized, writing to Valkey stream %s", STREAM_KEY)
     # Use a local loop; do not spawn extra threads in the child process for simplicity
     while True:
         try:
@@ -180,10 +192,27 @@ def main(wait_timeout: float = 1.0) -> None:
                 },
                 maxlen=10000,  # Keep only the last 10000 entries
             )
-        except redis.ConnectionError:
-            internal_logger.error("Lost connection to Valkey, Retrying...")
-            time.sleep(1)
         except Exception as exc:
+            # Determine if this is a connection-related error from redis. Different
+            # redis client implementations may expose the exception under different
+            # symbols, and some test doubles may raise generic Exceptions — be explicit
+            # about what should be treated as a transient connection failure.
+            conn_exc = getattr(redis, "ConnectionError", None)
+
+            # Treat as connection error if it's an instance of the redis ConnectionError
+            # or if the exception class name indicates a connection-related failure
+            # (covers some mocked or vendored implementations that may use different
+            # exception classes but keep 'Connection' in the name).
+            exc_class_name = getattr(exc, "__class__", type(exc)).__name__
+            if (conn_exc is not None and isinstance(exc, conn_exc)) or ("Connection" in exc_class_name):
+                logger.error("Lost connection to Valkey, Retrying...")
+                # Best-effort sleep; suppress any errors to avoid stopping the streamer
+                with suppress(Exception):
+                    time.sleep(1)
+                continue
+
+            # Non-connection errors are fatal for writing to Valkey
+            logger.exception("Failed to write to Valkey stream.")
             raise SampleLogError("Failed to write to Valkey stream.") from exc
 
 
