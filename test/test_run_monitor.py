@@ -69,3 +69,35 @@ def test_main_detects_new_run_start_message(
     payload = mock_redis_client.set.call_args[0][1]
     loaded = json.loads(payload)
     assert loaded["run_name"] == "MERLIN-002"
+
+
+def test_decode_value_returns_value_for_string():
+    """Test that _decode_value returns the value if it's a string."""
+    value = "test_string"
+    result = run_monitor._decode_value(value)
+    assert result == value
+
+
+def test_extract_run_name_returns_none_for_no_run_start():
+    """Test that extract_run_name returns None if run_start is None."""
+    result = run_monitor.extract_run_name(None)
+    assert result is None
+
+
+def test_extract_run_name_returns_none_if_raw_name_is_none():
+    """Test that extract_run_name returns None if RunName() returns None."""
+    mock_run_start = MagicMock()
+    mock_run_start.RunName.return_value = None
+    result = run_monitor.extract_run_name(mock_run_start)
+    assert result is None
+
+
+def test_run_monitor_main_detects_run_start_message_in_partition_records():
+    """Test that _is_run_start_message correctly identifies a run start message."""
+    mock_message = MagicMock()
+    mock_message.value = b"fake"
+    with patch("live_data_processor.run_monitor.get_schema", return_value="pl72"):
+        assert run_monitor._is_run_start_message(mock_message) is True
+
+    with patch("live_data_processor.run_monitor.get_schema", return_value="other"):
+        assert run_monitor._is_run_start_message(mock_message) is False
