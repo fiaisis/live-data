@@ -51,7 +51,8 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     # Set the offset to 3 messages from the end.
     tp = TopicPartition(f"{instrument}_runInfo", 0)
     end_offset = runinfo_consumer.end_offsets([tp])
-    runinfo_consumer.seek(tp, end_offset[tp] - 3)
+    start_offset = max(0, end_offset[tp] - 3)
+    runinfo_consumer.seek(tp, start_offset)
 
     # Grab the last 3 messages, reverse their order, then find the latest runstart by iterating through.
     messages = []
