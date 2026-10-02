@@ -1,4 +1,4 @@
-FROM ghcr.io/fiaisis/mantid:6.15.0
+FROM ghcr.io/fiaisis/mantid:6.16.1
 
 WORKDIR /app
 COPY ./live_data_processor/pyproject.toml .
