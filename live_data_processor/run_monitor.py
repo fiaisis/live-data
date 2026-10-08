@@ -31,7 +31,8 @@ RUNINFO_TOPIC = f"{INSTRUMENT}_runInfo"
 CURRENT_RUN_KEY = f"instrument:{INSTRUMENT}:current_run"
 
 
-logger = logging.getLogger("live_data_processor.run_monitor")
+logger = logging.getLogger(f"internal_run_monitor_{INSTRUMENT}")
+logger.setLevel(logging.INFO)
 if not logger.hasHandlers():
     _handler = logging.StreamHandler()
     _handler.setFormatter(logging.Formatter("%(asctime)s - INTERNAL - %(message)s"))
