@@ -31,7 +31,7 @@ def test_main_publishes_initial_run_state(
     assert "instrument:MERLIN:current_run" in key
     loaded = json.loads(payload)
     assert loaded["run_name"] == "MERLIN-001"
-    assert loaded["start_timestamp"] == "2023-11-14 22:13:20"
+    assert loaded["start_timestamp"] == "2024-03-09 16:00:00"
 
 
 @patch("live_data_processor.run_monitor.RunStart.GetRootAsRunStart")
