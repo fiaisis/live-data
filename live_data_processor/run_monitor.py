@@ -62,7 +62,7 @@ def _build_payload(run_start: RunStart) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "run_name": extract_run_name(run_start),
         "start_time": datetime_from_record_timestamp(run_start.StartTime()),
-        "start_timestamp": int(run_start.StartTime()),
+        "start_timestamp": run_start.StartTime(),
     }
 
     for attribute in ("RunNumber", "RunTitle", "SampleName", "InstrumentName"):
