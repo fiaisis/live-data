@@ -13,7 +13,7 @@ def test_main_publishes_initial_run_state(
 ):
     mock_run_start = MagicMock()
     mock_run_start.RunName.return_value = b"MERLIN-001"
-    mock_run_start.StartTime.return_value = "2023-11-14 22:13:20"
+    mock_run_start.StartTime.return_value = 1710000000000
     mock_find_latest.return_value = mock_run_start
 
     mock_redis_client = MagicMock()
@@ -50,7 +50,7 @@ def test_main_detects_new_run_start_message(
 
     run_start = MagicMock()
     run_start.RunName.return_value = b"MERLIN-002"
-    run_start.StartTime.return_value = "2023-11-14 22:13:20"
+    run_start.StartTime.return_value = 1710000000000
     mock_get_root.return_value = run_start
     mock_get_schema.return_value = "pl72"
 
