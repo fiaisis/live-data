@@ -158,8 +158,7 @@ def main() -> None:  # noqa: PLR0912, C901
             try:
                 consumer.close()
             except Exception as e:
-                print(f"Failed to close Kafka consumer cleanly:, {e}", flush=True)
-                logger.exception("Failed to close Kafka consumer cleanly")
+                logger.exception(msg=f"Failed to close Kafka consumer cleanly: {e}", exc_info=e)
 
 
 if __name__ == "__main__":
