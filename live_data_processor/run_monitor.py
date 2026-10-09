@@ -42,8 +42,6 @@ if not logger.hasHandlers():
 def _decode_value(value: Any) -> Any:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
-    if isinstance(value, (str | int | float | bool)) or value is None:
-        return value
     return str(value)
 
 
@@ -159,7 +157,8 @@ def main() -> None:  # noqa: PLR0912, C901
         if consumer is not None:
             try:
                 consumer.close()
-            except Exception:
+            except Exception as e:
+                print(f"Failed to close Kafka consumer cleanly:, {e}", flush=True)
                 logger.exception("Failed to close Kafka consumer cleanly")
 
 
