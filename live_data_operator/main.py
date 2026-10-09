@@ -369,7 +369,7 @@ def setup_deployment(
         name=f"run-monitor-{instrument}",
         command=["python", "/run_monitor.py"],
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
-        resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "128Gi"}),
+        resources=V1ResourceRequirements(requests={"memory": "256Mi"}, limits={"memory": "512Mi"}),
         volume_mounts=[
             V1VolumeMount(name="ceph-mount", mount_path="/output"),
             V1VolumeMount(name="archive-mount", mount_path="/archive"),
