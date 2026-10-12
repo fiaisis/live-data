@@ -39,7 +39,7 @@ if not logger.hasHandlers():
     logger.addHandler(_handler)
 
 
-def _decode_value(value: Any) -> Any:
+def _decode_value(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return str(value)
