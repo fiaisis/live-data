@@ -367,7 +367,7 @@ def setup_deployment(
 
     run_monitor_container = V1Container(
         name=f"run-monitor-{instrument}",
-        command=["python", "/run_monitor.py"],
+        command=["python", "run_monitor.py"],
         image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
         resources=V1ResourceRequirements(requests={"memory": "256Mi"}, limits={"memory": "512Mi"}),
         volume_mounts=[
