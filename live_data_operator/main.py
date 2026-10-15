@@ -170,7 +170,6 @@ def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(func)
     def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> Any:
         try:
-            logger.info("Inside decorator")
             return func(*args, **kwargs)
         except ApiException as exc:
             if exc.status == HTTPStatus.CONFLICT:
@@ -335,6 +334,7 @@ def setup_deployment(
     _setup_archive_pv(instrument, namespace)
     _setup_archive_pvc(instrument, namespace)
 
+    # we want 3 of these eventually; run monitor, epics streamer, main
     container = V1Container(
         name=f"livedataprocessor-{instrument}",
         command=["python", "main.py"],
@@ -352,8 +352,39 @@ def setup_deployment(
             V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
         ],
     )
+
+    epics_streamer_container = V1Container(
+        name=f"epics-streamer-{instrument}",
+        command=["python", "epics_streamer.py"],
+        image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
+        resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "128Gi"}),
+        env=[
+            V1EnvVar(name="INSTRUMENT", value=instrument),
+            V1EnvVar(name="VALKEY_HOST", value=VALKEY_HOST),
+            V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
+        ],
+    )
+
+    run_monitor_container = V1Container(
+        name=f"run-monitor-{instrument}",
+        command=["python", "run_monitor.py"],
+        image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
+        resources=V1ResourceRequirements(requests={"memory": "256Mi"}, limits={"memory": "512Mi"}),
+        volume_mounts=[
+            V1VolumeMount(name="ceph-mount", mount_path="/output"),
+            V1VolumeMount(name="archive-mount", mount_path="/archive"),
+        ],
+        env=[
+            V1EnvVar(name="INSTRUMENT", value=instrument),
+            V1EnvVar(name="GITHUB_API_TOKEN", value=GITHUB_API_TOKEN),
+            V1EnvVar(name="FIA_API_URL", value=FIA_API_URL),
+            V1EnvVar(name="VALKEY_HOST", value=VALKEY_HOST),
+            V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
+        ],
+    )
+
     pod_spec = V1PodSpec(
-        containers=[container],
+        containers=[container, epics_streamer_container, run_monitor_container],
         restart_policy="Always",
         service_account="live-data-operator",
         tolerations=[V1Toleration(key="staging", operator="Equal", value="big", effect="NoSchedule")],
@@ -401,6 +432,8 @@ def start_live_data_processor(instrument: str) -> None:
     body = setup_deployment(CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME)
     body = ApiClient().sanitize_for_serialization(body)  # serialize so kopf may adopt it
     kopf.adopt(body)
+
+    logger.info("Creating Deployment for %s LiveDataProcessor...", instrument)
 
     try:
         AppsV1Api().create_namespaced_deployment(namespace=CEPH_CREDS_SECRET_NAMESPACE, body=body)
