@@ -8,7 +8,6 @@ near real-time for a selected instrument.
 
 import datetime
 import os
-import queue
 import signal
 import threading
 import time
@@ -208,48 +207,6 @@ def process_message(message: Any) -> None:
     if schema == "ev42":
         events = EventMessage.GetRootAsEventMessage(message.value, 0)
         process_events(events)
-
-
-def run_monitor_thread(
-    instrument: str,
-    kafka_config: dict[str, object],
-    run_signal_queue: queue.Queue,
-    shutdown_event: threading.Event,
-) -> None:
-    """
-    Background thread that continuously monitors the runInfo topic for new runs.
-    Pushes new RunStart messages to the provided thread-safe queue.
-    """
-    # Python KafkaConsumers are not thread-safe, so we instantiate a dedicated consumer
-    consumer_config = kafka_config.copy()
-    consumer_config["consumer_timeout_ms"] = 1000  # Allow loop to check shutdown_event
-
-    topic_name = f"{instrument}_runInfo"
-    consumer = KafkaConsumer(topic_name, **consumer_config)
-
-    current_run_name = None
-
-    try:
-        while not shutdown_event.is_set():
-            for message in consumer:
-                if shutdown_event.is_set():
-                    break
-
-                schema = get_schema(message.value)
-                if schema == "pl72":
-                    run_start = RunStart.GetRootAsRunStart(message.value, 0)
-                    run_name = run_start.RunName()
-                    if isinstance(run_name, bytes):
-                        run_name = run_name.decode("utf-8")
-
-                    if current_run_name != run_name:
-                        current_run_name = run_name
-                        run_signal_queue.put(run_start)
-    except Exception as e:
-        internal_logger.error("Error in run monitor thread: %s", e)
-    finally:
-        consumer.close()
-        internal_logger.info("Run monitor thread shut down cleanly.")
 
 
 def start_live_reduction(  # noqa: C901, PLR0915
