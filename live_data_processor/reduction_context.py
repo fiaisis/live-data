@@ -1,16 +1,18 @@
 from enum import Enum, auto
 
+
 class States(Enum):
     WAITINGFORRUN = auto()
     INITIALIZINGWORKSPACE = auto()
     REALTIME = auto()
 
-class ReductionContext():
+
+class ReductionContext:
     def __init__(self):
         self.current_state = States.WAITINGFORRUN
 
     def process_event(self, event):
-        match(self.current_state, event):
+        match (self.current_state, event):
             case (States.WAITINGFORRUN, "waiting"):
                 self.current_state = States.WAITINGFORRUN
             case (States.INITIALIZINGWORKSPACE, "initializing"):
@@ -19,5 +21,3 @@ class ReductionContext():
                 self.current_state = States.REALTIME
             case (States.REALTIME, "waiting"):
                 self.current_state = States.WAITINGFORRUN
-
-
