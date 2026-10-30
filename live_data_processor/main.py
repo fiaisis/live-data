@@ -321,7 +321,11 @@ def start_live_reduction(  # noqa: C901, PLR0915
             # Check for new run
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
-                latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
+                run_monitor_stream_key = f"instrument:{INSTRUMENT}:run_monitor"
+                latest_run_data = VALKEY_CLIENT.xread(run_monitor_stream_key)
+                print(latest_run_data)
+                latest_runstart = latest_run_data[0][1]
+
                 if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
                     external_logger.info(
                         "New run detected: RunStart message at %s",

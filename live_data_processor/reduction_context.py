@@ -4,7 +4,7 @@ from enum import Enum, auto
 class States(Enum):
     WAITINGFORRUN = auto()
     INITIALIZINGWORKSPACE = auto()
-    REALTIME = auto()
+    REALTIMEPROCESSING = auto()
 
 
 class ReductionContext:
@@ -13,11 +13,9 @@ class ReductionContext:
 
     def process_event(self, event):
         match (self.current_state, event):
-            case (States.WAITINGFORRUN, "waiting"):
-                self.current_state = States.WAITINGFORRUN
             case (States.INITIALIZINGWORKSPACE, "initializing"):
                 self.current_state = States.INITIALIZINGWORKSPACE
-            case (States.REALTIME, "realtime"):
-                self.current_state = States.REALTIME
-            case (States.REALTIME, "waiting"):
+            case (States.REALTIMEPROCESSING, "realtime"):
+                self.current_state = States.REALTIMEPROCESSING
+            case (States.REALTIMEPROCESSING, "waiting"):
                 self.current_state = States.WAITINGFORRUN
