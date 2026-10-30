@@ -333,7 +333,7 @@ def start_live_reduction(  # noqa: C901, PLR0915
                 if latest_runstart is not None and latest_runname != current_run_start.RunName():
                     external_logger.info(
                         "New run detected: RunStart message at %s",
-                        datetime_from_record_timestamp(latest_runstart.StartTime()),
+                        datetime_from_record_timestamp(latest_runstart),
                     )
 
                     # Switch run_start and break out to reinitialize in-place
