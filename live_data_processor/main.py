@@ -7,6 +7,7 @@ near real-time for a selected instrument.
 """
 
 import datetime
+import json
 import os
 import signal
 import threading
@@ -322,18 +323,17 @@ def start_live_reduction(  # noqa: C901, PLR0915
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
                 run_monitor_stream_key = f"instrument:{INSTRUMENT}:current_run"
-                latest_run_data = VALKEY_CLIENT.get(run_monitor_stream_key)
-                external_logger.info("latest run data: %s", latest_run_data)
-                formatted_data = []
-                for  _, messages in latest_run_data:
-                    for _, fields in messages:
-                        formatted_data.append({
-                            "run_name": fields.get("run_name"),
-                            "start_timestamp": fields.get("start_timestamp"),
-                            "instrumentName": fields.get("instrumentName"),
-                        })
-                latest_runstart = formatted_data[0]["start_timestamp"]
-                latest_runname = formatted_data[0]["run_name"]
+                latest_run_data_json = VALKEY_CLIENT.get(run_monitor_stream_key)
+                external_logger.info("latest run data: %s", latest_run_data_json)
+                formatted_data = json.loads(latest_run_data_json)
+                for  fields in formatted_data:
+                    formatted_data.append({
+                        "run_name": fields.get("run_name"),
+                        "start_timestamp": fields.get("start_timestamp"),
+                        "instrumentName": fields.get("instrumentName"),
+                    })
+                latest_runstart = formatted_data["start_timestamp"]
+                latest_runname = formatted_data["run_name"]
 
                 if latest_runstart is not None and latest_runname != current_run_start.RunName():
                     external_logger.info(
