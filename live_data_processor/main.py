@@ -326,7 +326,7 @@ def start_live_reduction(  # noqa: C901, PLR0915
                 latest_run_data_json = VALKEY_CLIENT.get(run_monitor_stream_key)
                 external_logger.info("latest run data: %s", latest_run_data_json)
                 formatted_data = json.loads(latest_run_data_json)
-                
+
                 latest_runstart = formatted_data["start_timestamp"]
                 latest_runname = formatted_data["run_name"]
 
