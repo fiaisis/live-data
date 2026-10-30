@@ -322,11 +322,20 @@ def start_live_reduction(  # noqa: C901, PLR0915
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
                 run_monitor_stream_key = f"instrument:{INSTRUMENT}:current_run"
-                latest_run_data = VALKEY_CLIENT.xread(run_monitor_stream_key)
+                latest_run_data = VALKEY_CLIENT.xread({run_monitor_stream_key: "0-0"})
                 external_logger.info("latest run data: %s", latest_run_data)
-                latest_runstart = latest_run_data[0]
+                formatted_data = []
+                for  _, messages in latest_run_data:
+                    for _, fields in messages:
+                        formatted_data.append({
+                            "run_name": fields.get("run_name"),
+                            "start_timestamp": fields.get("start_timestamp"),
+                            "instrumentName": fields.get("instrumentName"),
+                        })
+                latest_runstart = formatted_data[0]["start_timestamp"]
+                latest_runname = formatted_data[0]["run_name"]
 
-                if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
+                if latest_runstart is not None and latest_runname != current_run_start.RunName():
                     external_logger.info(
                         "New run detected: RunStart message at %s",
                         datetime_from_record_timestamp(latest_runstart.StartTime()),
