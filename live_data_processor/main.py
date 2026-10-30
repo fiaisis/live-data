@@ -322,7 +322,7 @@ def start_live_reduction(  # noqa: C901, PLR0915
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
                 run_monitor_stream_key = f"instrument:{INSTRUMENT}:current_run"
-                latest_run_data = VALKEY_CLIENT.xread({run_monitor_stream_key: "0-0"})
+                latest_run_data = VALKEY_CLIENT.get(run_monitor_stream_key)
                 external_logger.info("latest run data: %s", latest_run_data)
                 formatted_data = []
                 for  _, messages in latest_run_data:
