@@ -7,6 +7,7 @@ near real-time for a selected instrument.
 """
 
 import datetime
+import json
 import os
 import signal
 import threading
@@ -321,11 +322,18 @@ def start_live_reduction(  # noqa: C901, PLR0915
             # Check for new run
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
-                latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
-                if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
+                run_monitor_stream_key = f"instrument:{INSTRUMENT}:current_run"
+                latest_run_data_json = VALKEY_CLIENT.get(run_monitor_stream_key)
+                external_logger.info("latest run data: %s", latest_run_data_json)
+                formatted_data = json.loads(latest_run_data_json)
+
+                latest_runstart = formatted_data["start_timestamp"]
+                latest_runname = formatted_data["run_name"]
+
+                if latest_runstart is not None and latest_runname != current_run_start.RunName():
                     external_logger.info(
                         "New run detected: RunStart message at %s",
-                        datetime_from_record_timestamp(latest_runstart.StartTime()),
+                        latest_runstart,
                     )
 
                     # Switch run_start and break out to reinitialize in-place
