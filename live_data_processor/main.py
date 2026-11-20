@@ -6,15 +6,12 @@ reduction script refresh/execute loop to process neutron event data in
 near real-time for a selected instrument.
 """
 
-import contextlib
 import datetime
 import os
-import queue
 import signal
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 from types import FrameType
 from typing import Any
 
@@ -26,15 +23,10 @@ from mantid.simpleapi import (
     AddTimeSeriesLog,
     RemoveWorkspaceHistory,
 )
-from streaming_data_types import deserialise_f144
 from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMessage
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 from streaming_data_types.utils import get_schema
 
-from live_data_processor.epics_streamer import (
-    restart_epics_streaming,
-    start_logging_process,
-)
 from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteError
 from live_data_processor.kafka_io import (
     datetime_from_record_timestamp,
@@ -203,91 +195,31 @@ def initialize_run(
     return run_start
 
 
-def process_message(message: Any, kafka_sample_streaming: bool = False) -> None:
+def process_message(message: Any) -> None:
     """Process a single Kafka message from the events or sample-env topics.
 
-    Depending on the message schema, this will either add event data to the
-    live workspace (ev42) or, when enabled, append sample-environment logs
-    (f144) as Mantid time series logs.
+    This will add event data to the live workspace if ev42 schema is used. Other schemas are ignored.
 
     :param message: A Kafka message object with a binary payload in message.value.
-    :param kafka_sample_streaming: If True, process f144 sample log messages as well.
     :return: None
     """
     schema = get_schema(message.value)
     if schema == "ev42":
         events = EventMessage.GetRootAsEventMessage(message.value, 0)
         process_events(events)
-    elif kafka_sample_streaming and schema == "f144":
-        log_data = deserialise_f144(message.value)
-        source = log_data.source_name.replace("IN:MERLIN:CS:SB:", "").title()
-        with contextlib.suppress(TypeError):
-            AddTimeSeriesLog(
-                "lives",
-                source,
-                datetime.datetime.fromtimestamp(log_data.timestamp_unix_ns / 1e9, tz=datetime.UTC).isoformat(),
-                log_data.value,
-            )
 
 
-def run_monitor_thread(
-    instrument: str,
-    kafka_config: dict[str, object],
-    run_signal_queue: queue.Queue,
-    shutdown_event: threading.Event,
-) -> None:
-    """
-    Background thread that continuously monitors the runInfo topic for new runs.
-    Pushes new RunStart messages to the provided thread-safe queue.
-    """
-    # Python KafkaConsumers are not thread-safe, so we instantiate a dedicated consumer
-    consumer_config = kafka_config.copy()
-    consumer_config["consumer_timeout_ms"] = 1000  # Allow loop to check shutdown_event
-
-    topic_name = f"{instrument}_runInfo"
-    consumer = KafkaConsumer(topic_name, **consumer_config)
-
-    current_run_name = None
-
-    try:
-        while not shutdown_event.is_set():
-            for message in consumer:
-                if shutdown_event.is_set():
-                    break
-
-                schema = get_schema(message.value)
-                if schema == "pl72":
-                    run_start = RunStart.GetRootAsRunStart(message.value, 0)
-                    run_name = run_start.RunName()
-                    if isinstance(run_name, bytes):
-                        run_name = run_name.decode("utf-8")
-
-                    if current_run_name != run_name:
-                        current_run_name = run_name
-                        run_signal_queue.put(run_start)
-    except Exception as e:
-        internal_logger.error("Error in run monitor thread: %s", e)
-    finally:
-        consumer.close()
-        internal_logger.info("Run monitor thread shut down cleanly.")
-
-
-def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
+def start_live_reduction(  # noqa: C901, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
-    run_signal_queue: queue.Queue,
-    kafka_sample_log_streaming: bool = False,
-    epics_proc=None,
-    epics_stop_event=None,
-    epics_log_file: str = "sample_log.txt",
 ) -> None:
     """
     Run the main live data reduction loop for an instrument.
 
     This function manages the full lifecycle of live reduction across
-    successive runs: initializing each run, consuming Kafka event data,
-    periodically refreshing and executing the reduction script, and
-    detecting new runs to switch in-place without recursion.
+    successive runs: initializing each run, periodically refreshing and
+    executing the reduction script, and detecting new runs to switch
+    in-place without recursion.
 
     When file-based EPICS sample logging is used (i.e. Kafka sample-log
     streaming is disabled), it also manages the EPICS logging process,
@@ -297,18 +229,12 @@ def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
 
     :param events_consumer: Kafka consumer subscribed to the <instrument>_events topic.
     :param runinfo_consumer: Kafka consumer subscribed to the <instrument>_runInfo topic.
-    :param kafka_sample_log_streaming: If True, sample logs are consumed directly
-                                        from Kafka; otherwise EPICS logs are streamed
-                                        to file and replayed during reduction.
-    :param epics_proc: Active EPICS logging process, if any.
-    :param epics_stop_event: Stop event used to shut down the EPICS logging process.
-    :param epics_log_file: Path to the EPICS sample-log file when file-based logging is used.
     :return: None
     """
     current_run_start: RunStart | None = None
     reduction_function: Callable[[], None] = get_initial_reduction_function(INSTRUMENT)
 
-    while not shutdown_event.is_set():
+    while True:
         try:
             current_run_start = initialize_run(
                 events_consumer,
@@ -320,6 +246,12 @@ def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
             internal_logger.warning("Could not initialize run: %s. Retrying in %s seconds...", ex, RUN_CHECK_INTERVAL)
             time.sleep(RUN_CHECK_INTERVAL)
             continue
+
+        # Delete previous run's EPICS stream data from Valkey cache if we are using file/Valkey-based logging
+        epics_stream_key = f"instrument:{INSTRUMENT}:epics_stream"
+        VALKEY_CLIENT.delete(epics_stream_key)
+        internal_logger.info("Cleared Valkey EPICS stream: %s", epics_stream_key)
+
         external_logger.info(
             "Run began at %s",
             datetime_from_record_timestamp(current_run_start.StartTime()),
@@ -331,16 +263,12 @@ def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
         # Reset per-run timers
         script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
         script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
-        # Note: run_last_checked_time has been removed
+        run_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
 
         # Consume events until we detect a new run, then break to reinitialize.
-
         for message in events_consumer:
-            if shutdown_event.is_set():
-                break
-
-            process_message(message, kafka_sample_streaming=kafka_sample_log_streaming)
-            # Optional: Log lag every 1000 messages to avoid spamming the broker
+            process_message(message)
+            # Optional: Log lag every 100000 messages to avoid spamming the broker
             if message.offset % 100000 == 0:
                 lags = get_consumer_lag(events_consumer)
                 total_lag = sum(lags.values())
@@ -356,18 +284,26 @@ def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
             # Execute reduction function periodically
             if (now - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
                 try:
-                    if not kafka_sample_log_streaming:
-                        with Path(epics_log_file).open("r", encoding="utf-8") as f:
-                            for line in f:
-                                source, value, timestamp = line.split(" - ")
-                                AddTimeSeriesLog(
-                                    LIVE_WS_NAME,
-                                    source,
-                                    timestamp,
-                                    value,
-                                )
-                        ws = mtd[LIVE_WS_NAME]
-                        RemoveWorkspaceHistory(ws)
+                    stream_key = f"instrument:{INSTRUMENT}:epics_stream"
+
+                    # Fetch all events currently in the stream
+                    epics_logs = VALKEY_CLIENT.xrange(stream_key, "-", "+")
+
+                    for _, data in epics_logs:
+                        source = data.get("block_name")
+                        value = data.get("value")
+                        timestamp = data.get("timestamp")
+
+                        if source and value and timestamp:
+                            AddTimeSeriesLog(
+                                LIVE_WS_NAME,
+                                source,
+                                timestamp,
+                                value,
+                            )
+
+                    ws = mtd[LIVE_WS_NAME]
+                    RemoveWorkspaceHistory(ws)
                     external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
                     external_logger.info("Executing reduction script")
                     with capture_and_tee(external_logger):
@@ -382,23 +318,21 @@ def start_live_reduction(  # noqa: C901, PLR0912, PLR0915
                         SCRIPT_EXECUTION_INTERVAL,
                     )
 
-            # Check for new run via non-blocking queue check
-            try:
-                latest_runstart = run_signal_queue.get_nowait()
+            # Check for new run
+            now = datetime.datetime.now(tz=datetime.UTC)
+            if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
+                latest_runstart = find_latest_run_start(runinfo_consumer, INSTRUMENT)
+                if latest_runstart is not None and latest_runstart.RunName() != current_run_start.RunName():
+                    external_logger.info(
+                        "New run detected: RunStart message at %s",
+                        datetime_from_record_timestamp(latest_runstart.StartTime()),
+                    )
 
-                external_logger.info(
-                    "New run detected: RunStart message at %s",
-                    datetime_from_record_timestamp(latest_runstart.StartTime()),
-                )
+                    # Switch run_start and break out to reinitialize in-place
+                    current_run_start = latest_runstart
+                    break
 
-                if not kafka_sample_log_streaming:
-                    epics_proc, epics_stop_event = restart_epics_streaming(epics_log_file, epics_proc, epics_stop_event)
-
-                # Switch run_start and break out to reinitialize in-place
-                current_run_start = latest_runstart
-                break
-            except queue.Empty:
-                pass
+                run_last_checked_time = now
 
         # If the consumer loop ends (rare), just re-enter the while-loop and attempt to reinitialize.
         current_run_start = None
@@ -432,50 +366,11 @@ def main() -> None:
         "api_version_auto_timeout_ms": 60000,
     }
     events_consumer, runinfo_consumer = setup_consumers(INSTRUMENT, kafka_config)
-    kafka_sample_streaming = False
 
-    if not kafka_sample_streaming:
-        epics_proc, epics_stop_event = start_logging_process(f"{INSTRUMENT.lower()}_log.txt")
-    else:
-        epics_proc, epics_stop_event = None, None
-
-    # Start the Background Run Monitor Thread
-    run_signal_queue = queue.Queue()
-    monitor_thread = threading.Thread(
-        target=run_monitor_thread, args=(INSTRUMENT, kafka_config, run_signal_queue, shutdown_event), daemon=True
+    start_live_reduction(
+        events_consumer,
+        runinfo_consumer,
     )
-    monitor_thread.start()
-
-    try:
-        start_live_reduction(
-            events_consumer,
-            runinfo_consumer,
-            run_signal_queue,
-            kafka_sample_log_streaming=kafka_sample_streaming,
-            epics_proc=epics_proc,
-            epics_stop_event=epics_stop_event,
-            epics_log_file=f"{INSTRUMENT.lower()}_log.txt",
-        )
-
-    finally:
-        # Trigger shutdown for all threads
-        shutdown_event.set()
-
-        # Wait for background thread to exit
-        monitor_thread.join(timeout=5)
-
-        # Gracefully close Kafka Consumers
-        events_consumer.close()
-        runinfo_consumer.close()
-
-        if not kafka_sample_streaming:
-            # Clean shutdown of EPICS logging process
-            epics_stop_event.set()
-            with contextlib.suppress(Exception):
-                epics_proc.join(timeout=5)
-                if epics_proc.is_alive():
-                    epics_proc.terminate()
-                    epics_proc.join(timeout=2)
 
 
 if __name__ == "__main__":
