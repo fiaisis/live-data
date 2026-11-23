@@ -5,7 +5,7 @@ import pytest
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 
 from live_data_processor.exceptions import TopicIncompleteError
-from live_data_processor.main import initialize_run
+from live_data_processor.main import find_new_run_start, initialize_run
 
 # clear to prevent redis conn
 logging.getLogger("EXTERNAL").handlers.clear()
@@ -76,20 +76,19 @@ def test_start_live_reduction_reads_valkey(
     import datetime
 
     run_start_mock = MagicMock(spec=RunStart)
+    run_start_mock.RunName.return_value = b"MERLIN00075500"
+    VALKEY_CLIENT.get.return_value = '{"run_name": "MERLIN00075500"}'
     # First call: return a valid RunStart. Second call: raise to exit the while True loop.
     mock_init_run.side_effect = [
         run_start_mock,
         StopIteration("break out of while loop"),
     ]
 
-    # Mock events_consumer to yield exactly one message per iteration
+    # Check the run once before the reduction interval expires.
     mock_message = MagicMock()
     mock_events_consumer = MagicMock()
-    mock_events_consumer.__iter__ = MagicMock(return_value=iter([mock_message]))
+    mock_events_consumer.__iter__ = MagicMock(return_value=iter([mock_message, mock_message]))
     mock_runinfo_consumer = MagicMock()
-
-    # Return None so the "new run" check doesn't trigger a break (we exit via init_run instead)
-    mock_find_latest.return_value = None
 
     # Mock Valkey xrange to return some data
     VALKEY_CLIENT.xrange = MagicMock()
@@ -117,7 +116,9 @@ def test_start_live_reduction_reads_valkey(
             if now_call_count <= 3:
                 # Timer initialization: return a baseline time
                 return datetime.datetime(2050, 1, 1, 0, 0, 0, tzinfo=datetime.UTC)
-            # Subsequent calls: return a time far enough ahead to trigger all intervals
+            if now_call_count <= 5:
+                return datetime.datetime(2050, 1, 1, 0, 0, 4, tzinfo=datetime.UTC)
+            # The next message arrives after the reduction interval.
             return datetime.datetime(2050, 1, 2, 0, 0, 0, tzinfo=datetime.UTC)
 
     with patch("live_data_processor.main.datetime.datetime", MockDatetime):
@@ -126,6 +127,8 @@ def test_start_live_reduction_reads_valkey(
                 mock_events_consumer,
                 mock_runinfo_consumer,
             )
+
+    mock_find_latest.assert_not_called()
 
     # Verify xrange was called with the correct stream key
     VALKEY_CLIENT.xrange.assert_called_once()
@@ -140,3 +143,28 @@ def test_start_live_reduction_reads_valkey(
     # Verify the values were added to the workspace log
     mock_add.assert_called_once()
     mock_add.assert_called_with("lives", "TestBlock", "2023-01-01T12:00:00Z", "10.5")
+
+
+@pytest.mark.parametrize(
+    ("reported_name", "candidate_name", "candidate_time", "should_switch"),
+    [
+        ("MERLIN00075472", "MERLIN00075500", 1000, False),
+        ("MERLIN00075472", "MERLIN00075472", 500, False),
+        ("MERLIN00075501", "MERLIN00075501", 2000, True),
+    ],
+)
+@patch("live_data_processor.main.find_latest_run_start")
+def test_find_new_run_start(mock_find, reported_name, candidate_name, candidate_time, should_switch):
+    from live_data_processor.main import VALKEY_CLIENT
+
+    current = MagicMock(spec=RunStart)
+    current.StartTime.return_value = 1000
+    candidate = MagicMock(spec=RunStart)
+    candidate.RunName.return_value = candidate_name.encode()
+    candidate.StartTime.return_value = candidate_time
+    mock_find.return_value = candidate
+    VALKEY_CLIENT.get.return_value = f'{{"run_name": "{reported_name}"}}'
+
+    result = find_new_run_start(MagicMock(), current, "MERLIN00075500")
+
+    assert result is (candidate if should_switch else None)

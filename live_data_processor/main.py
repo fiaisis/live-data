@@ -37,6 +37,7 @@ from live_data_processor.kafka_io import (
     setup_consumers,
 )
 from live_data_processor.loggers import VALKEY_CLIENT, capture_and_tee, setup_loggers
+from live_data_processor.run_monitor import extract_run_name
 from live_data_processor.scripts import (
     get_initial_reduction_function,
     refresh_reduction_function,
@@ -210,6 +211,37 @@ def process_message(message: Any) -> None:
         process_events(events)
 
 
+def find_new_run_start(
+    runinfo_consumer: KafkaConsumer,
+    current_run_start: RunStart,
+    current_run_name: str | None,
+) -> RunStart | None:
+    """Resolve a Valkey run change to a newer Kafka RunStart."""
+    latest_run_data = VALKEY_CLIENT.get(f"instrument:{INSTRUMENT}:current_run")
+    if latest_run_data is None:
+        return None
+
+    try:
+        latest_run_name = json.loads(latest_run_data)["run_name"]
+    except (ValueError, KeyError, TypeError):
+        internal_logger.warning("Invalid current run data in Valkey")
+        return None
+    if not latest_run_name or latest_run_name == current_run_name:
+        return None
+
+    try:
+        candidate = find_latest_run_start(runinfo_consumer, INSTRUMENT)
+    except TopicIncompleteError:
+        return None
+    if (
+        candidate is not None
+        and extract_run_name(candidate) == latest_run_name
+        and candidate.StartTime() > current_run_start.StartTime()
+    ):
+        return candidate
+    return None
+
+
 def start_live_reduction(  # noqa: C901, PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
@@ -265,6 +297,9 @@ def start_live_reduction(  # noqa: C901, PLR0915
         script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
         script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
         run_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
+
+        next_run_start = None
+        current_run_name = extract_run_name(current_run_start)
 
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
@@ -322,28 +357,16 @@ def start_live_reduction(  # noqa: C901, PLR0915
             # Check for new run
             now = datetime.datetime.now(tz=datetime.UTC)
             if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
-                run_monitor_stream_key = f"instrument:{INSTRUMENT}:current_run"
-                latest_run_data_json = VALKEY_CLIENT.get(run_monitor_stream_key)
-                external_logger.info("latest run data: %s", latest_run_data_json)
-                formatted_data = json.loads(latest_run_data_json)
-
-                latest_runstart = formatted_data["start_timestamp"]
-                latest_runname = formatted_data["run_name"]
-
-                if latest_runstart is not None and latest_runname != current_run_start.RunName():
+                run_last_checked_time = now
+                next_run_start = find_new_run_start(runinfo_consumer, current_run_start, current_run_name)
+                if next_run_start is not None:
                     external_logger.info(
                         "New run detected: RunStart message at %s",
-                        latest_runstart,
+                        datetime_from_record_timestamp(next_run_start.StartTime()),
                     )
-
-                    # Switch run_start and break out to reinitialize in-place
-                    current_run_start = latest_runstart
                     break
 
-                run_last_checked_time = now
-
-        # If the consumer loop ends (rare), just re-enter the while-loop and attempt to reinitialize.
-        current_run_start = None
+        current_run_start = next_run_start
 
 
 def main() -> None:
