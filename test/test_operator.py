@@ -74,7 +74,12 @@ def test_setup_archive_pv(mock_core_api):
 def test_setup_deployment(mock_ceph_pv, mock_ceph_pvc, mock_arch_pv, mock_arch_pvc):
     """Test that setup_deployment invokes the PV setups and returns a correct V1Deployment."""
     deployment = setup_deployment(
-        "ceph-creds-secret", "cluster-id-123", "MERLIN", "test-namespace", "my-fs", "processor-uid"
+        "ceph-creds-secret",
+        "cluster-id-123",
+        "MERLIN",
+        "test-namespace",
+        "my-fs",
+        "processor-uid",
     )
 
     mock_ceph_pv.assert_called_once()
@@ -93,4 +98,6 @@ def test_setup_deployment(mock_ceph_pv, mock_ceph_pvc, mock_arch_pv, mock_arch_p
     assert env_vars["INSTRUMENT"] == "MERLIN"
 
     run_monitor = deployment.spec.template.spec.containers[2]
-    assert {e.name: e.value for e in run_monitor.env}["RUN_MONITOR_GROUP"] == "MERLIN_run_monitor_processor-uid"
+    assert {e.name: e.value for e in run_monitor.env}[
+        "RUN_MONITOR_GROUP"
+    ] == "MERLIN_run_monitor_processor-uid"

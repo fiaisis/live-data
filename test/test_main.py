@@ -87,7 +87,9 @@ def test_start_live_reduction_reads_valkey(
     # Check the run once before the reduction interval expires.
     mock_message = MagicMock()
     mock_events_consumer = MagicMock()
-    mock_events_consumer.__iter__ = MagicMock(return_value=iter([mock_message, mock_message]))
+    mock_events_consumer.__iter__ = MagicMock(
+        return_value=iter([mock_message, mock_message])
+    )
     mock_runinfo_consumer = MagicMock()
 
     # Mock Valkey xrange to return some data
@@ -154,7 +156,9 @@ def test_start_live_reduction_reads_valkey(
     ],
 )
 @patch("live_data_processor.main.find_latest_run_start")
-def test_find_new_run_start(mock_find, reported_name, candidate_name, candidate_time, should_switch):
+def test_find_new_run_start(
+    mock_find, reported_name, candidate_name, candidate_time, should_switch
+):
     from live_data_processor.main import VALKEY_CLIENT
 
     current = MagicMock(spec=RunStart)
