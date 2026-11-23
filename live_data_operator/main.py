@@ -41,13 +41,7 @@ GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
 
 
 class EndpointFilter(logging.Filter):
-    """
-    A logging filter to exclude health and readiness probe messages.
-
-    Filters out log messages containing "/healthz" or "/ready" from aiohttp.access logs.
-
-    :param logging.Filter: Base class for all logging filters.
-    """
+    """Logging filter for health and readiness probes."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         """
@@ -87,19 +81,15 @@ VALKEY_PORT = os.environ.get("VALKEY_PORT", "6379")
 
 
 def get_processor_image_sha() -> str:
-    """
-    Get the processor image sha from the environment variable.
-    We use a function so that if the image update changes, a reload is guaranteed
-    """
+    """Read the configured processor image digest or its default value."""
     return os.environ.get("LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb84cac95e094cdd245df6ca3bfb6")
 
 
 def processor_image_ref(sha: str) -> str:
     """
-    Given a sha, return the image reference
-
-    :param sha: The sha of the image
-    :return: The image reference
+    Build the processor image reference for a digest.
+    :param sha: The SHA-256 digest without its prefix.
+    :return: The full container image reference.
     """
     return f"ghcr.io/fiaisis/live-data-processor@sha256:{sha}"
 
@@ -174,6 +164,12 @@ def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(func)
     def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> Any:
+        """
+        Call the resource creation function and ignore an already-exists response.
+        :param args: Positional arguments for the wrapped function.
+        :param kwargs: Keyword arguments for the wrapped function.
+        :return: The wrapped function result, or None on a conflict.
+        """
         try:
             return func(*args, **kwargs)
         except ApiException as exc:
@@ -188,10 +184,10 @@ def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
 @skip_conflict
 def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
     """
-    Set up the archive PV using the loaded kubeconfig as a destination
-    :param instrument: str, the name of the instrument for the livedataprocessor pv
-    :param secret_namespace: str, the namespace of the secret for mounting
-    :return: str, the name of the archive PV.
+    Create the SMB persistent volume for instrument archive data.
+    :param instrument: The instrument name.
+    :param secret_namespace: The namespace containing the archive credentials.
+    :return: None.
     """
     pv_name = f"livedataprocessor-{instrument}-archive-pv-smb"
     metadata = V1ObjectMeta(name=pv_name, annotations={"pv.kubernetes.io/provisioned-by": "smb.csi.k8s.io"})
@@ -217,10 +213,10 @@ def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
 @skip_conflict
 def _setup_archive_pvc(instrument: str, job_namespace: str) -> None:
     """
-    Set up the archive PVC using the loaded kubeconfig as a destination
-    :param instrument: str, the name of the instrument that the livedataprocessor PVC is made for
-    :param job_namespace: str, the namespace that the job is in
-    :return: str, the name of the PVC
+    Create the persistent volume claim for instrument archive data.
+    :param instrument: The instrument name.
+    :param job_namespace: The namespace for the claim.
+    :return: None.
     """
     pvc_name = f"livedataprocessor-{instrument}-archive-pvc"
     metadata = V1ObjectMeta(name=pvc_name)

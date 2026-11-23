@@ -10,23 +10,13 @@ import live_data_processor.scripts as scripts
 @pytest.fixture
 def script_env(tmp_path, monkeypatch):
     """
-    Safely test dynamic imports and file I/O by rerouting REDUCTION_SCRIPT_PATH
-    to a temporary directory and adding it to sys.path.
+    Give each test an isolated script file and import path.
 
-    CRITICAL FIX: BYTECODE CACHE RACE CONDITION - RE: test_refresh_reduction_function_with_update
-    - Bug: Unit tests write the "old" and "new" scripts within the same second.
-      Because the OS file modification timestamp resolution is 1 second, the timestamps
-      match exactly. `importlib.reload()` sees the matching timestamp and incorrectly
-      loads the old cached `.pyc` bytecode instead of the newly written file.
-    - Fix: `sys.dont_write_bytecode = True` forces Python to bypass the cache
-      and read from disk every time. (This is a test-only issue; production updates
-      happen on longer timescales, naturally avoiding the timestamp collision).
+    Disable bytecode writes so rapid script updates in tests cannot reuse stale cached code.
 
-    THE SLEEP EXPERIMENT (To verify):
-    1. Comment out the `dont_write_bytecode` line below.
-    2. Run the tests. The update test will fail.
-    3. Add `import time; time.sleep(1.5)` right before writing the new script in the test.
-    4. Run the tests again. They will pass, proving the OS timestamp resolution is the culprit.
+    :param tmp_path: The temporary directory for the script.
+    :param monkeypatch: The pytest fixture used to override the script path and bytecode settings.
+    :return: A fixture that yields the temporary script path.
     """
     # Disable bytecode caching to prevent timestamp race conditions during testing
     monkeypatch.setattr(sys, "dont_write_bytecode", True)

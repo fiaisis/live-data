@@ -37,14 +37,11 @@ def datetime_from_record_timestamp(timestamp: int) -> str:
 
 def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> RunStart | None:
     """
-    Find the latest RunStart message in the runinfo topic.
-
-    This function seeks to the end of the runinfo topic, retrieves the last few messages,
-    and searches for the most recent RunStart message.
-
-    :param runinfo_consumer: The Kafka consumer for the runinfo topic.
-    :return: The latest RunStart message if found, None otherwise.
-    :raises TopicIncompleteError: If the topic does not have any messages.
+    Find the most recent RunStart in the records inspected at the end of the run-info topic.
+    :param runinfo_consumer: The Kafka consumer for the run-info topic.
+    :param instrument: The instrument whose run-info partition is inspected.
+    :return: The latest RunStart found, or None if none is present.
+    :raises TopicIncompleteError: If no records can be read.
     """
     external_logger.info("Attempting to find the latest run start...")
     latest_start = None
@@ -87,10 +84,12 @@ def seek_event_consumer_to_runstart(
     events_consumer: KafkaConsumer,
 ) -> None:
     """
-    Adjust the given event consumer's position to the beginning of the given run
-    :param run_start: The run start message to seek to.
-    :param events_consumer: The event consumer to seek to the run start message in.
-    :return: None
+    Seek the event consumer to the first Kafka record at or after the run start.
+    :param instrument: The instrument whose event topic is consumed.
+    :param run_start: The Kafka record that provides the run start time.
+    :param events_consumer: The Kafka consumer to reposition.
+    :return: None.
+    :raises OffsetNotFoundError: If Kafka has no event offset for that time.
     """
     run_start_ms = run_start.StartTime()
     timestamp = datetime_from_record_timestamp(run_start_ms)
@@ -115,8 +114,10 @@ def setup_consumers(
     kafka_config: dict[str, Any],
 ) -> tuple[KafkaConsumer, KafkaConsumer]:
     """
-    Create the consumers for events and runinfo
-    :return: A tuple of KafkaConsumer objects for events and runinfo.
+    Create the consumers for the instrument's event and run-info topics.
+    :param instrument: The instrument whose topics are consumed.
+    :param kafka_config: The configuration shared by both consumers.
+    :return: The event consumer followed by the run-info consumer.
     """
     events_consumer = KafkaConsumer(**kafka_config)
     runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", consumer_timeout_ms=10000, **kafka_config)

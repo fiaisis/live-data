@@ -10,13 +10,10 @@ from live_data_processor.epics_streamer import dehex_and_decompress, main
 
 @pytest.fixture
 def valkey_client_mock(monkeypatch):
-    """Provide a shared mock that replaces the module-level VALKEY_CLIENT.
-
-    This mimics the valkey client behavior used by epics_streamer and allows
-    tests to control xadd side effects and assertions in a single place.
-
-    Also patch _format_timestamp to a deterministic ISO string to avoid any
-    environment-dependent timezone/formatting issues during tests.
+    """
+    Replace the Valkey client and use a fixed timestamp for EPICS updates.
+    :param monkeypatch: The pytest fixture used to replace module attributes.
+    :return: The mock Valkey client.
     """
     client = MagicMock()
     monkeypatch.setattr("live_data_processor.epics_streamer.VALKEY_CLIENT", client)

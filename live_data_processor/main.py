@@ -157,14 +157,10 @@ def process_events(events: EventMessage) -> None:
 
 def _shutdown(signum: int, frame: FrameType | None) -> None:
     """
-    Handle system signals for clean termination of live data processing.
-
-    This function is triggered when a system signal (e.g., SIGTERM or SIGINT)
-    is received. It ensures a clean shutdown by setting the global shutdown event.
-
-    :param signum: The signal number that triggered the function (e.g., SIGTERM, SIGINT).
-    :param frame: The current stack frame (unused in this function but required by the signal handler).
-    :return: None
+    Set the shutdown flag in response to an operating system signal.
+    :param signum: The signal number.
+    :param frame: The current stack frame, if available.
+    :return: None.
     """
     internal_logger.info("Signal %s received, initiating graceful shutdown…", signum)
     shutdown_event.set()
@@ -202,12 +198,9 @@ def initialize_run(
 
 def process_message(message: Any) -> None:
     """
-    Process a single Kafka message from the events or sample-env topics.
-
-    This will add event data to the live workspace if ev42 schema is used. Other schemas are ignored.
-
-    :param message: A Kafka message object with a binary payload in message.value.
-    :return: None
+    Decode an event record and append its neutron events to the workspace.
+    :param message: The Kafka record. Payloads without the ev42 identifier are ignored.
+    :return: None.
     """
     schema = get_schema(message.value)
     if schema == "ev42":
@@ -257,22 +250,13 @@ def start_live_reduction(  # noqa: C901, PLR0915
     runinfo_consumer: KafkaConsumer,
 ) -> None:
     """
-    Run the main live data reduction loop for an instrument.
+    Initialize the workspace and process events for successive instrument runs.
 
-    This function manages the full lifecycle of live reduction across
-    successive runs: initializing each run, periodically refreshing and
-    executing the reduction script, and detecting new runs to switch
-    in-place without recursion.
+    Load EPICS time-series logs from Valkey before invoking the reduction script.
 
-    When file-based EPICS sample logging is used (i.e. Kafka sample-log
-    streaming is disabled), it also manages the EPICS logging process,
-    restarting it on each run change so sample logs are kept run-local.
-
-    The loop runs continuously until the process is terminated.
-
-    :param events_consumer: Kafka consumer subscribed to the <instrument>_events topic.
-    :param runinfo_consumer: Kafka consumer subscribed to the <instrument>_runInfo topic.
-    :return: None
+    :param events_consumer: The Kafka consumer for the instrument's event topic.
+    :param runinfo_consumer: The Kafka consumer used to resolve run starts.
+    :return: None.
     """
     current_run_start: RunStart | None = None
     reduction_function: Callable[[], None] = get_initial_reduction_function(INSTRUMENT)

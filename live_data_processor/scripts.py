@@ -17,9 +17,9 @@ REDUCTION_SCRIPT_PATH = Path("reduction_script.py")
 
 def get_script(instrument: str) -> str | None:
     """
-    Fetch the latest live data processing script for a specific instrument.
-
-    :returns: The content of the live data processing script as a string.
+    Fetch the current reduction script from the FIA API.
+    :param instrument: The instrument whose script is requested.
+    :return: The script source, or None if the API does not return a successful response.
     """
     response = requests.get(f"{FIA_API_URL}/live-data/{instrument.lower()}/script", timeout=5)
     return response.json() if response.status_code == HTTPStatus.OK else None
@@ -27,10 +27,9 @@ def get_script(instrument: str) -> str | None:
 
 def write_reduction_script(script: str) -> None:
     """
-    Given a script, write it to the file
-
-    :param script: The script to write
-    :return: None
+    Write the reduction script to the local module file.
+    :param script: The Python source returned by the FIA API.
+    :return: None.
     """
     with REDUCTION_SCRIPT_PATH.open("w") as fle:
         fle.write(script)

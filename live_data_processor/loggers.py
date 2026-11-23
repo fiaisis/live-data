@@ -20,15 +20,7 @@ VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses
 
 
 class ValkeyStreamHandler(logging.Handler):
-    """
-    Robust logging handler that pushes logs to a Valkey stream (Redis).
-
-    Behavior:
-    - Non-blocking emit(): places formatted log records on an internal bounded queue.
-    - Background worker drains the queue and performs XADD calls to Redis.
-    - On Redis errors the worker retries with backoff; records are not discarded immediately.
-    - If the internal queue is full, oldest messages are dropped in favor of newest to avoid unbounded memory growth.
-    """
+    """Logging handler that publishes formatted records to a Valkey stream."""
 
     def __init__(
         self,
@@ -51,7 +43,11 @@ class ValkeyStreamHandler(logging.Handler):
         self.backoff_base = backoff_base
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Quickly enqueue a formatted record for background delivery to Redis."""
+        """
+        Publish a formatted log record to Valkey.
+        :param record: The log record to format and publish.
+        :return: None.
+        """
         try:
             msg = self.format(record)
             entry = (msg, record.levelname, record)
@@ -113,10 +109,7 @@ def setup_loggers(instrument_name: str) -> tuple[logging.Logger, logging.Logger,
 
 
 class TeeLoggerWriter(io.TextIOBase):
-    """
-    A file-like object that acts like a Tee.
-    It writes to the original stdout and sends a copy to a logger.
-    """
+    """File-like writer that mirrors standard output to a logger."""
 
     def __init__(self, original_stream: io.TextIOBase, logger: logging.Logger):
         """
@@ -150,10 +143,9 @@ class TeeLoggerWriter(io.TextIOBase):
 @contextmanager
 def capture_and_tee(logger: logging.Logger) -> Generator[None, None, None]:
     """
-    Context manager to redirect sys.stdout to both the console and the provided logger.
-
-    :param logger: The logger to mirror the stdout output to.
-    :yield: None
+    Mirror standard output to the supplied logger until the context exits.
+    :param logger: The logger to receive a copy of standard output.
+    :return: None.
     """
     original_stdout = sys.stdout
     # We pass the original sys.stdout and our external logger into the Tee
