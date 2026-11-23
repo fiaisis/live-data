@@ -297,6 +297,12 @@ def start_live_reduction(  # noqa: C901, PLR0915
         script_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
         script_last_executed_time = datetime.datetime.now(tz=datetime.UTC)
         run_last_checked_time = datetime.datetime.now(tz=datetime.UTC)
+        first_reduction_due = script_last_executed_time + datetime.timedelta(seconds=SCRIPT_EXECUTION_INTERVAL)
+        external_logger.info(
+            "First reduction expected around %s UTC (%.0f seconds after initialization), on the next event",
+            first_reduction_due.strftime("%Y-%m-%d %H:%M:%S"),
+            SCRIPT_EXECUTION_INTERVAL,
+        )
 
         next_run_start = None
         current_run_name = extract_run_name(current_run_start)
