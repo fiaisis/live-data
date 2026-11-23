@@ -101,13 +101,14 @@ def processor_image_ref(sha: str) -> str:
     return f"ghcr.io/fiaisis/live-data-processor@sha256:{sha}"
 
 
-def recreate_processor_deployment(instrument: str, namespace: str) -> None:
+def recreate_processor_deployment(instrument: str, namespace: str, resource_uid: str) -> None:
     """
     Deletes the processor Deployment if it exists, waits for deletion to complete,
     then recreates it using the current image SHA and spec from setup_deployment().
 
     :param instrument: The instrument for which the deployment is being recreated
     :param namespace: The namespace in which the deployment is being recreated
+    :param resource_uid: LiveDataProcessor UID used to isolate the Kafka consumer group.
 
     :return: None
     """
@@ -151,6 +152,7 @@ def recreate_processor_deployment(instrument: str, namespace: str) -> None:
         instrument=instrument,
         namespace=namespace,
         fs_name=FS_NAME,
+        resource_uid=resource_uid,
     )
 
     body = ApiClient().sanitize_for_serialization(body)
@@ -313,7 +315,7 @@ def _setup_ceph_pvc(instrument: str, namespace: str) -> None:
 
 
 def setup_deployment(
-    ceph_creds_k8s_secret_name: str, cluster_id: str, instrument: str, namespace: str, fs_name: str
+    ceph_creds_k8s_secret_name: str, cluster_id: str, instrument: str, namespace: str, fs_name: str, resource_uid: str
 ) -> V1Deployment:
     """
     Sets up a Kubernetes Deployment for the Live Data Processor.
@@ -326,6 +328,7 @@ def setup_deployment(
     :param instrument: Name of the instrument for which the deployment will process live data.
     :param namespace: Namespace in which the deployment will be created.
     :param fs_name: CephFS file system name to be used by the deployment.
+    :param resource_uid: LiveDataProcessor UID used to isolate the Kafka consumer group.
     :return: Configured V1Deployment object ready for deployment in Kubernetes.
     """
 
@@ -376,6 +379,7 @@ def setup_deployment(
         ],
         env=[
             V1EnvVar(name="INSTRUMENT", value=instrument),
+            V1EnvVar(name="RUN_MONITOR_GROUP", value=f"{instrument.upper()}_run_monitor_{resource_uid}"),
             V1EnvVar(name="GITHUB_API_TOKEN", value=GITHUB_API_TOKEN),
             V1EnvVar(name="FIA_API_URL", value=FIA_API_URL),
             V1EnvVar(name="VALKEY_HOST", value=VALKEY_HOST),
@@ -417,7 +421,7 @@ def setup_deployment(
     )
 
 
-def start_live_data_processor(instrument: str) -> None:
+def start_live_data_processor(instrument: str, resource_uid: str) -> None:
     """
     Initialize and start the Live Data Processor for a given instrument.
 
@@ -426,10 +430,13 @@ def start_live_data_processor(instrument: str) -> None:
     it and recreating a new one in case of conflicts.
 
     :param instrument: The name of the instrument for which the live data processor is deployed.
+    :param resource_uid: LiveDataProcessor UID used to isolate the Kafka consumer group.
     :return: None
     """
 
-    body = setup_deployment(CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME)
+    body = setup_deployment(
+        CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME, resource_uid
+    )
     body = ApiClient().sanitize_for_serialization(body)  # serialize so kopf may adopt it
     kopf.adopt(body)
 
@@ -443,7 +450,7 @@ def start_live_data_processor(instrument: str) -> None:
             AppsV1Api().delete_namespaced_deployment(
                 name=f"livedataprocessor-{instrument}-deployment", namespace=CEPH_CREDS_SECRET_NAMESPACE
             )
-            start_live_data_processor(instrument)
+            start_live_data_processor(instrument, resource_uid)
         else:
             raise
 
@@ -467,7 +474,7 @@ def create_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
     instrument = body["metadata"]["name"]
     logger.info(f"Creating LiveDataProcessor {body['metadata']['name']}")
-    start_live_data_processor(instrument)
+    start_live_data_processor(instrument, body["metadata"]["uid"])
 
 
 @kopf.on.resume("livedataprocessors")
@@ -488,4 +495,4 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
     instrument = body["metadata"]["name"]
     logger.info(f"Operator resumed, redeploying {instrument} LiveDataProcessor")
-    recreate_processor_deployment(instrument, CEPH_CREDS_SECRET_NAMESPACE)
+    recreate_processor_deployment(instrument, CEPH_CREDS_SECRET_NAMESPACE, body["metadata"]["uid"])
