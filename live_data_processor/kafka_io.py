@@ -26,7 +26,8 @@ KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
 
 
 def datetime_from_record_timestamp(timestamp: int) -> str:
-    """Convert a Kafka record timestamp (ms since epoch) to a readable string.
+    """
+    Convert a Kafka record timestamp (ms since epoch) to a readable string.
 
     :param timestamp: Milliseconds since Unix epoch from a Kafka record.
     :return: Timestamp formatted as YYYY-MM-DD HH:MM:SS in UTC.
@@ -91,7 +92,6 @@ def seek_event_consumer_to_runstart(
     :param events_consumer: The event consumer to seek to the run start message in.
     :return: None
     """
-
     run_start_ms = run_start.StartTime()
     timestamp = datetime_from_record_timestamp(run_start_ms)
     external_logger.info("Seeking event consumer to run start: %s", timestamp)

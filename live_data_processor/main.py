@@ -105,7 +105,6 @@ def get_event_temporal_lag(events: EventMessage) -> float:
     :param events: The EventMessage containing event data with an embedded pulse timestamp.
     :return: The lag in seconds (as a float) between the event pulse time and current time.
     """
-
     event_time_ns = events.PulseTime()
     current_time_ns = time.time_ns()
 
@@ -114,6 +113,7 @@ def get_event_temporal_lag(events: EventMessage) -> float:
 
 
 def process_events(events: EventMessage) -> None:
+    """Append neutron events and their pulse times to the live workspace."""
     global LAST_LOG_TIME, IS_CATCHING_UP  # noqa: PLW0603
 
     raw_pulse_time_ns = events.PulseTime()
@@ -162,7 +162,6 @@ def _shutdown(signum: int, frame: FrameType | None) -> None:
     :param frame: The current stack frame (unused in this function but required by the signal handler).
     :return: None
     """
-
     internal_logger.info("Signal %s received, initiating graceful shutdown…", signum)
     shutdown_event.set()
 
@@ -198,7 +197,8 @@ def initialize_run(
 
 
 def process_message(message: Any) -> None:
-    """Process a single Kafka message from the events or sample-env topics.
+    """
+    Process a single Kafka message from the events or sample-env topics.
 
     This will add event data to the live workspace if ev42 schema is used. Other schemas are ignored.
 
@@ -380,7 +380,7 @@ def start_live_reduction(  # noqa: C901, PLR0915
 
 def main() -> None:
     """
-    Main function to start live data processing for the specified instrument.
+    Start live data processing for the configured instrument.
 
     This function initializes signal handling for graceful shutdown, retrieves the
     live data processing script, starts the live data processing for the instrument,

@@ -1,6 +1,4 @@
-"""
-Main Module
-"""
+"""Main Module."""
 
 import logging
 import os
@@ -52,6 +50,7 @@ class EndpointFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Decide whether to emit the log record."""
         return record.getMessage().find("/healthz") == -1 and record.getMessage().find("/ready") == -1
 
 
@@ -103,8 +102,8 @@ def processor_image_ref(sha: str) -> str:
 
 def recreate_processor_deployment(instrument: str, namespace: str, resource_uid: str) -> None:
     """
-    Deletes the processor Deployment if it exists, waits for deletion to complete,
-    then recreates it using the current image SHA and spec from setup_deployment().
+    Delete the processor Deployment if it exists, wait for deletion to complete,
+    then recreate it using the current image SHA and spec from setup_deployment().
 
     :param instrument: The instrument for which the deployment is being recreated
     :param namespace: The namespace in which the deployment is being recreated
@@ -164,7 +163,7 @@ def recreate_processor_deployment(instrument: str, namespace: str, resource_uid:
 
 def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
     """
-    Decorator to skip the creation of a resource that already exists
+    Skip creation when the resource already exists.
     :param func: The func to wrap
     :return: The wrapped function
     """
@@ -185,12 +184,11 @@ def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
 @skip_conflict
 def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
     """
-    Sets up the archive PV using the loaded kubeconfig as a destination
+    Set up the archive PV using the loaded kubeconfig as a destination
     :param instrument: str, the name of the instrument for the livedataprocessor pv
     :param secret_namespace: str, the namespace of the secret for mounting
-    :return: str, the name of the archive PV
+    :return: str, the name of the archive PV.
     """
-
     pv_name = f"livedataprocessor-{instrument}-archive-pv-smb"
     metadata = V1ObjectMeta(name=pv_name, annotations={"pv.kubernetes.io/provisioned-by": "smb.csi.k8s.io"})
     secret_ref = V1SecretReference(name="archive-creds", namespace=secret_namespace)
@@ -215,7 +213,7 @@ def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
 @skip_conflict
 def _setup_archive_pvc(instrument: str, job_namespace: str) -> None:
     """
-    Sets up the archive PVC using the loaded kubeconfig as a destination
+    Set up the archive PVC using the loaded kubeconfig as a destination
     :param instrument: str, the name of the instrument that the livedataprocessor PVC is made for
     :param job_namespace: str, the namespace that the job is in
     :return: str, the name of the PVC
@@ -247,7 +245,7 @@ def _setup_ceph_pv(
     instrument: str,
 ) -> None:
     """
-    Sets up a Ceph PersistentVolume (PV) in Kubernetes.
+    Set up a Ceph PersistentVolume (PV) in Kubernetes.
 
     Creates a static CephFS-based PV with the specified attributes, including storage, access modes, and volume settings
 
@@ -288,7 +286,7 @@ def _setup_ceph_pv(
 @skip_conflict
 def _setup_ceph_pvc(instrument: str, namespace: str) -> None:
     """
-    Sets up a Ceph PersistentVolumeClaim (PVC) in Kubernetes.
+    Set up a Ceph PersistentVolumeClaim (PVC) in Kubernetes.
 
     Creates a PVC that binds to a pre-existing Ceph PV, ensuring storage access for the specified instrument.
 
@@ -318,7 +316,7 @@ def setup_deployment(
     ceph_creds_k8s_secret_name: str, cluster_id: str, instrument: str, namespace: str, fs_name: str, resource_uid: str
 ) -> V1Deployment:
     """
-    Sets up a Kubernetes Deployment for the Live Data Processor.
+    Set up a Kubernetes Deployment for the Live Data Processor.
 
     Configures a deployment with a containerized live data processor and its associated storage volumes, environment
     variables, and restart policies.
@@ -331,7 +329,6 @@ def setup_deployment(
     :param resource_uid: LiveDataProcessor UID used to isolate the Kafka consumer group.
     :return: Configured V1Deployment object ready for deployment in Kubernetes.
     """
-
     _setup_ceph_pv(ceph_creds_k8s_secret_name, namespace, cluster_id, fs_name, instrument)
     _setup_ceph_pvc(instrument, namespace)
     _setup_archive_pv(instrument, namespace)
@@ -433,7 +430,6 @@ def start_live_data_processor(instrument: str, resource_uid: str) -> None:
     :param resource_uid: LiveDataProcessor UID used to isolate the Kafka consumer group.
     :return: None
     """
-
     body = setup_deployment(
         CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME, resource_uid
     )
@@ -458,7 +454,7 @@ def start_live_data_processor(instrument: str, resource_uid: str) -> None:
 @kopf.on.create("livedataprocessors")
 def create_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
-    Handles the creation of a LiveDataProcessor custom resource in Kubernetes.
+    Handle the creation of a LiveDataProcessor custom resource in Kubernetes.
 
     This function is triggered when a LiveDataProcessor custom resource is created
     in the Kubernetes cluster. It retrieves the instrument identifier from the resource
@@ -480,7 +476,7 @@ def create_fn(body: Any, spec: Any, **kwargs: Any) -> None:
 @kopf.on.resume("livedataprocessors")
 def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
-    Handles the resumption of a LiveDataProcessor custom resource in Kubernetes.
+    Handle the resumption of a LiveDataProcessor custom resource in Kubernetes.
 
     This function is invoked when a LiveDataProcessor custom resource is resumed in the Kubernetes cluster,
     such as after a pod restart or operator downtime and redeploys the processor.

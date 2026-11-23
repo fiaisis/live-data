@@ -1,3 +1,5 @@
+"""Configure live-data logging and publish log records to Valkey."""
+
 import io
 import logging
 import os
@@ -37,6 +39,7 @@ class ValkeyStreamHandler(logging.Handler):
         max_delivery_attempts: int = MAX_DELIVERY_ATTEMPTS,
         backoff_base: float = 0.5,
     ) -> None:
+        """Configure the stream destination and bounded log queue."""
         super().__init__()
         self.client = client
         self.stream_key = stream_key
@@ -48,9 +51,7 @@ class ValkeyStreamHandler(logging.Handler):
         self.backoff_base = backoff_base
 
     def emit(self, record: logging.LogRecord) -> None:
-        """
-        Quickly enqueue a formatted record for background delivery to Redis.
-        """
+        """Quickly enqueue a formatted record for background delivery to Redis."""
         try:
             msg = self.format(record)
             entry = (msg, record.levelname, record)
@@ -76,7 +77,7 @@ class ValkeyStreamHandler(logging.Handler):
 
 def setup_loggers(instrument_name: str) -> tuple[logging.Logger, logging.Logger, str]:
     """
-    Configures and returns the internal and external loggers for a specific instrument.
+    Configure and return the internal and external loggers for a specific instrument.
 
     :param instrument_name: The name of the instrument (CR) to construct logger and stream names.
     :return: A tuple containing the internal logger, external logger, and the Valkey stream key.

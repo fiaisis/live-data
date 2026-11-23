@@ -82,9 +82,7 @@ def _load_block_names() -> list[str]:
 
 
 def _make_monitor_callback(event_queue: "queue.Queue[EventT]"):
-    """
-    Build an EPICS monitor callback that closes over the given queue.
-    """
+    """Build an EPICS monitor callback that closes over the given queue."""
 
     def _monitor_callback(pvname=None, value=None, timestamp=None, **kws):
         """
@@ -144,17 +142,16 @@ def init_pvs(
 
 
 def _format_timestamp(timestamp_ns: int) -> str:
-    """
-    Format timestamp to ISO 8601 using UTC timezone.
-    """
+    """Format timestamp to ISO 8601 using UTC timezone."""
     dt = datetime.datetime.fromtimestamp(timestamp_ns / 1e9, tz=datetime.UTC)
     return dt.isoformat()
 
 
 def main(wait_timeout: float = 1.0) -> None:
     """
-    Main loop for EPICS streaming.
-    The EPICS callbacks will enqueue updates; we drain and write until stop_event is set.
+    Discover EPICS process variables and stream their updates to Valkey.
+
+    EPICS callbacks enqueue samples for the main loop to publish.
     """
     # Per-process state lives here
     event_queue: queue.Queue[EventT] = queue.Queue()

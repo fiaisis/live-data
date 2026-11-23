@@ -40,12 +40,14 @@ if not logger.hasHandlers():
 
 
 def _decode_value(value: Any) -> str:
+    """Convert a FlatBuffers field to text for JSON publication."""
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return str(value)
 
 
 def extract_run_name(run_start: RunStart | None) -> str | None:
+    """Return the decoded run name when one is available."""
     if run_start is None:
         return None
 
@@ -57,6 +59,7 @@ def extract_run_name(run_start: RunStart | None) -> str | None:
 
 
 def _build_payload(run_start: RunStart) -> dict[str, Any]:
+    """Build the current-run summary and include optional metadata when present."""
     payload: dict[str, Any] = {
         "run_name": extract_run_name(run_start),
         "start_timestamp": datetime_from_record_timestamp(run_start.StartTime()),
@@ -88,6 +91,7 @@ def _get_base_kafka_config() -> dict[str, object]:
 
 
 def _publish_run_state(valkey_client: redis.Redis, run_start: RunStart) -> None:
+    """Write the current-run summary to the Valkey key for the instrument."""
     payload = _build_payload(run_start)
     json_payload = json.dumps(payload, ensure_ascii=False)
     logger.info("Publishing run state to %s: %s", CURRENT_RUN_KEY, payload)
@@ -95,6 +99,7 @@ def _publish_run_state(valkey_client: redis.Redis, run_start: RunStart) -> None:
 
 
 def _discover_latest_run_start() -> RunStart | None:
+    """Read the latest run start with a short-lived consumer."""
     temp_config = _get_base_kafka_config()
     temp_config["consumer_timeout_ms"] = 10000
     consumer = KafkaConsumer(RUNINFO_TOPIC, **temp_config)
@@ -105,6 +110,7 @@ def _discover_latest_run_start() -> RunStart | None:
 
 
 def _configure_consumer() -> KafkaConsumer:
+    """Subscribe with the monitor group and commit offsets after processing."""
     kafka_config = _get_base_kafka_config()
     # A new group must see records published between discovery and its first poll.
     kafka_config.update(group_id=RUN_MONITOR_GROUP, auto_offset_reset="earliest", enable_auto_commit=False)
@@ -118,6 +124,7 @@ def _is_run_start_message(message: Any) -> bool:
 
 
 def main() -> None:  # noqa: PLR0912, C901
+    """Publish the startup snapshot and follow newer run starts in Kafka."""
     logger.info("Starting Run Monitor for %s on topic %s", INSTRUMENT, RUNINFO_TOPIC)
     valkey_client = _get_valkey_client()
 

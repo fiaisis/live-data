@@ -1,3 +1,5 @@
+"""Initialize Mantid workspaces for live runs."""
+
 import datetime
 import logging
 import os
