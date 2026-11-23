@@ -40,14 +40,22 @@ if not logger.hasHandlers():
 
 
 def _decode_value(value: Any) -> str:
-    """Convert a FlatBuffers field to text for JSON publication."""
+    """
+    Convert a FlatBuffers field to text for JSON publication.
+    :param value: The field value to decode or convert to text.
+    :return: The field as a string.
+    """
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return str(value)
 
 
 def extract_run_name(run_start: RunStart | None) -> str | None:
-    """Return the decoded run name when one is available."""
+    """
+    Extract the run name from a Kafka RunStart record.
+    :param run_start: The decoded RunStart record, if available.
+    :return: The run name as text, or None if the record or name is missing.
+    """
     if run_start is None:
         return None
 
@@ -59,7 +67,11 @@ def extract_run_name(run_start: RunStart | None) -> str | None:
 
 
 def _build_payload(run_start: RunStart) -> dict[str, Any]:
-    """Build the current-run summary and include optional metadata when present."""
+    """
+    Build the current-run summary for Valkey.
+    :param run_start: The decoded Kafka RunStart record.
+    :return: A dictionary with the run name, UTC start time, and available optional metadata.
+    """
     payload: dict[str, Any] = {
         "run_name": extract_run_name(run_start),
         "start_timestamp": datetime_from_record_timestamp(run_start.StartTime()),
@@ -75,10 +87,12 @@ def _build_payload(run_start: RunStart) -> dict[str, Any]:
 
 
 def _get_valkey_client() -> redis.Redis:
+    """Create a Valkey client that decodes responses as text."""
     return redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 
 
 def _get_base_kafka_config() -> dict[str, object]:
+    """Return the Kafka settings shared by the discovery and monitor consumers."""
     return {
         "bootstrap_servers": f"{KAFKA_IP}:{KAFKA_PORT}",
         "auto_offset_reset": "latest",
@@ -91,7 +105,12 @@ def _get_base_kafka_config() -> dict[str, object]:
 
 
 def _publish_run_state(valkey_client: redis.Redis, run_start: RunStart) -> None:
-    """Write the current-run summary to the Valkey key for the instrument."""
+    """
+    Publish the current-run summary as JSON.
+    :param valkey_client: The Valkey connection.
+    :param run_start: The decoded RunStart record to publish.
+    :return: None.
+    """
     payload = _build_payload(run_start)
     json_payload = json.dumps(payload, ensure_ascii=False)
     logger.info("Publishing run state to %s: %s", CURRENT_RUN_KEY, payload)
@@ -99,7 +118,10 @@ def _publish_run_state(valkey_client: redis.Redis, run_start: RunStart) -> None:
 
 
 def _discover_latest_run_start() -> RunStart | None:
-    """Read the latest run start with a short-lived consumer."""
+    """
+    Read the latest run start with a short-lived Kafka consumer.
+    :return: The latest RunStart record, or None if the records inspected contain no run start.
+    """
     temp_config = _get_base_kafka_config()
     temp_config["consumer_timeout_ms"] = 10000
     consumer = KafkaConsumer(RUNINFO_TOPIC, **temp_config)
@@ -110,7 +132,10 @@ def _discover_latest_run_start() -> RunStart | None:
 
 
 def _configure_consumer() -> KafkaConsumer:
-    """Subscribe with the monitor group and commit offsets after processing."""
+    """
+    Subscribe to the instrument's run-info topic with automatic commits disabled.
+    :return: The Kafka consumer for the run-monitor group.
+    """
     kafka_config = _get_base_kafka_config()
     # A new group must see records published between discovery and its first poll.
     kafka_config.update(group_id=RUN_MONITOR_GROUP, auto_offset_reset="earliest", enable_auto_commit=False)
@@ -120,11 +145,22 @@ def _configure_consumer() -> KafkaConsumer:
 
 
 def _is_run_start_message(message: Any) -> bool:
+    """
+    Check whether the Kafka message uses the RunStart schema.
+    :param message: The Kafka record to inspect.
+    :return: True if the payload has the RunStart schema identifier.
+    """
     return get_schema(message.value) == "pl72"
 
 
 def main() -> None:  # noqa: PLR0912, C901
-    """Publish the startup snapshot and follow newer run starts in Kafka."""
+    """
+    Publish the latest run at startup and monitor Kafka for newer run starts.
+
+    Commit offsets after processing each batch so a failed publication can be retried.
+
+    :return: None.
+    """
     logger.info("Starting Run Monitor for %s on topic %s", INSTRUMENT, RUNINFO_TOPIC)
     valkey_client = _get_valkey_client()
 

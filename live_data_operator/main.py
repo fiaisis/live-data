@@ -1,4 +1,4 @@
-"""Main Module."""
+"""Main module for the live data operator."""
 
 import logging
 import os
@@ -50,7 +50,11 @@ class EndpointFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """Decide whether to emit the log record."""
+        """
+        Filter health and readiness probes from the log.
+        :param record: The log record to check.
+        :return: True if the record should be emitted.
+        """
         return record.getMessage().find("/healthz") == -1 and record.getMessage().find("/ready") == -1
 
 

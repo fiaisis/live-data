@@ -113,7 +113,11 @@ def get_event_temporal_lag(events: EventMessage) -> float:
 
 
 def process_events(events: EventMessage) -> None:
-    """Append neutron events and their pulse times to the live workspace."""
+    """
+    Append neutron events and their pulse times to the live workspace.
+    :param events: The decoded Kafka event message.
+    :return: None.
+    """
     global LAST_LOG_TIME, IS_CATCHING_UP  # noqa: PLW0603
 
     raw_pulse_time_ns = events.PulseTime()
@@ -216,7 +220,13 @@ def find_new_run_start(
     current_run_start: RunStart,
     current_run_name: str | None,
 ) -> RunStart | None:
-    """Resolve a Valkey run change to a newer Kafka RunStart."""
+    """
+    Resolve a run change reported by Valkey to a matching Kafka RunStart.
+    :param runinfo_consumer: The Kafka consumer for the instrument's run-info topic.
+    :param current_run_start: The RunStart record for the active workspace.
+    :param current_run_name: The decoded name of the active run, if available.
+    :return: The matching newer RunStart record, or None if no change is confirmed.
+    """
     latest_run_data = VALKEY_CLIENT.get(f"instrument:{INSTRUMENT}:current_run")
     if latest_run_data is None:
         return None
