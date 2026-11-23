@@ -1,6 +1,4 @@
-"""
-Main Module
-"""
+"""Main module for the live data operator."""
 
 import logging
 import os
@@ -43,15 +41,14 @@ GITHUB_API_TOKEN = os.environ.get("GITHUB_API_TOKEN", "shh")
 
 
 class EndpointFilter(logging.Filter):
-    """
-    A logging filter to exclude health and readiness probe messages.
-
-    Filters out log messages containing "/healthz" or "/ready" from aiohttp.access logs.
-
-    :param logging.Filter: Base class for all logging filters.
-    """
+    """Logging filter for health and readiness probes."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """
+        Filter health and readiness probes from the log.
+        :param record: The log record to check.
+        :return: True if the record should be emitted.
+        """
         return record.getMessage().find("/healthz") == -1 and record.getMessage().find("/ready") == -1
 
 
@@ -84,30 +81,27 @@ VALKEY_PORT = os.environ.get("VALKEY_PORT", "6379")
 
 
 def get_processor_image_sha() -> str:
-    """
-    Get the processor image sha from the environment variable.
-    We use a function so that if the image update changes, a reload is guaranteed
-    """
+    """Read the configured processor image digest or its default value."""
     return os.environ.get("LIVE_DATA_PROCESSOR_IMAGE_SHA", "50f170947badb84cac95e094cdd245df6ca3bfb6")
 
 
 def processor_image_ref(sha: str) -> str:
     """
-    Given a sha, return the image reference
-
-    :param sha: The sha of the image
-    :return: The image reference
+    Build the processor image reference for a digest.
+    :param sha: The SHA-256 digest without its prefix.
+    :return: The full container image reference.
     """
     return f"ghcr.io/fiaisis/live-data-processor@sha256:{sha}"
 
 
-def recreate_processor_deployment(instrument: str, namespace: str) -> None:
+def recreate_processor_deployment(instrument: str, namespace: str, resource_uid: str) -> None:
     """
-    Deletes the processor Deployment if it exists, waits for deletion to complete,
-    then recreates it using the current image SHA and spec from setup_deployment().
+    Delete the processor Deployment if it exists, wait for deletion to complete,
+    then recreate it using the current image SHA and spec from setup_deployment().
 
     :param instrument: The instrument for which the deployment is being recreated
     :param namespace: The namespace in which the deployment is being recreated
+    :param resource_uid: LiveDataProcessor UID used to isolate the Kafka consumer group.
 
     :return: None
     """
@@ -151,6 +145,7 @@ def recreate_processor_deployment(instrument: str, namespace: str) -> None:
         instrument=instrument,
         namespace=namespace,
         fs_name=FS_NAME,
+        resource_uid=resource_uid,
     )
 
     body = ApiClient().sanitize_for_serialization(body)
@@ -162,15 +157,20 @@ def recreate_processor_deployment(instrument: str, namespace: str) -> None:
 
 def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
     """
-    Decorator to skip the creation of a resource that already exists
+    Skip creation when the resource already exists.
     :param func: The func to wrap
     :return: The wrapped function
     """
 
     @wraps(func)
     def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> Any:
+        """
+        Call the resource creation function and ignore an already-exists response.
+        :param args: Positional arguments for the wrapped function.
+        :param kwargs: Keyword arguments for the wrapped function.
+        :return: The wrapped function result, or None on a conflict.
+        """
         try:
-            logger.info("Inside decorator")
             return func(*args, **kwargs)
         except ApiException as exc:
             if exc.status == HTTPStatus.CONFLICT:
@@ -184,12 +184,11 @@ def skip_conflict(func: Callable[..., Any]) -> Callable[..., Any]:
 @skip_conflict
 def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
     """
-    Sets up the archive PV using the loaded kubeconfig as a destination
-    :param instrument: str, the name of the instrument for the livedataprocessor pv
-    :param secret_namespace: str, the namespace of the secret for mounting
-    :return: str, the name of the archive PV
+    Create the SMB persistent volume for instrument archive data.
+    :param instrument: The instrument name.
+    :param secret_namespace: The namespace containing the archive credentials.
+    :return: None.
     """
-
     pv_name = f"livedataprocessor-{instrument}-archive-pv-smb"
     metadata = V1ObjectMeta(name=pv_name, annotations={"pv.kubernetes.io/provisioned-by": "smb.csi.k8s.io"})
     secret_ref = V1SecretReference(name="archive-creds", namespace=secret_namespace)
@@ -214,10 +213,10 @@ def _setup_archive_pv(instrument: str, secret_namespace: str) -> None:
 @skip_conflict
 def _setup_archive_pvc(instrument: str, job_namespace: str) -> None:
     """
-    Sets up the archive PVC using the loaded kubeconfig as a destination
-    :param instrument: str, the name of the instrument that the livedataprocessor PVC is made for
-    :param job_namespace: str, the namespace that the job is in
-    :return: str, the name of the PVC
+    Create the persistent volume claim for instrument archive data.
+    :param instrument: The instrument name.
+    :param job_namespace: The namespace for the claim.
+    :return: None.
     """
     pvc_name = f"livedataprocessor-{instrument}-archive-pvc"
     metadata = V1ObjectMeta(name=pvc_name)
@@ -246,7 +245,7 @@ def _setup_ceph_pv(
     instrument: str,
 ) -> None:
     """
-    Sets up a Ceph PersistentVolume (PV) in Kubernetes.
+    Set up a Ceph PersistentVolume (PV) in Kubernetes.
 
     Creates a static CephFS-based PV with the specified attributes, including storage, access modes, and volume settings
 
@@ -287,7 +286,7 @@ def _setup_ceph_pv(
 @skip_conflict
 def _setup_ceph_pvc(instrument: str, namespace: str) -> None:
     """
-    Sets up a Ceph PersistentVolumeClaim (PVC) in Kubernetes.
+    Set up a Ceph PersistentVolumeClaim (PVC) in Kubernetes.
 
     Creates a PVC that binds to a pre-existing Ceph PV, ensuring storage access for the specified instrument.
 
@@ -314,10 +313,10 @@ def _setup_ceph_pvc(instrument: str, namespace: str) -> None:
 
 
 def setup_deployment(
-    ceph_creds_k8s_secret_name: str, cluster_id: str, instrument: str, namespace: str, fs_name: str
+    ceph_creds_k8s_secret_name: str, cluster_id: str, instrument: str, namespace: str, fs_name: str, resource_uid: str
 ) -> V1Deployment:
     """
-    Sets up a Kubernetes Deployment for the Live Data Processor.
+    Set up a Kubernetes Deployment for the Live Data Processor.
 
     Configures a deployment with a containerized live data processor and its associated storage volumes, environment
     variables, and restart policies.
@@ -327,14 +326,15 @@ def setup_deployment(
     :param instrument: Name of the instrument for which the deployment will process live data.
     :param namespace: Namespace in which the deployment will be created.
     :param fs_name: CephFS file system name to be used by the deployment.
+    :param resource_uid: LiveDataProcessor UID used to isolate the Kafka consumer group.
     :return: Configured V1Deployment object ready for deployment in Kubernetes.
     """
-
     _setup_ceph_pv(ceph_creds_k8s_secret_name, namespace, cluster_id, fs_name, instrument)
     _setup_ceph_pvc(instrument, namespace)
     _setup_archive_pv(instrument, namespace)
     _setup_archive_pvc(instrument, namespace)
 
+    # we want 3 of these eventually; run monitor, epics streamer, main
     container = V1Container(
         name=f"livedataprocessor-{instrument}",
         command=["python", "main.py"],
@@ -352,8 +352,40 @@ def setup_deployment(
             V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
         ],
     )
+
+    epics_streamer_container = V1Container(
+        name=f"epics-streamer-{instrument}",
+        command=["python", "epics_streamer.py"],
+        image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
+        resources=V1ResourceRequirements(requests={"memory": "32Gi"}, limits={"memory": "128Gi"}),
+        env=[
+            V1EnvVar(name="INSTRUMENT", value=instrument),
+            V1EnvVar(name="VALKEY_HOST", value=VALKEY_HOST),
+            V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
+        ],
+    )
+
+    run_monitor_container = V1Container(
+        name=f"run-monitor-{instrument}",
+        command=["python", "run_monitor.py"],
+        image=f"ghcr.io/fiaisis/live-data-processor@sha256:{PROCESSOR_IMAGE}",
+        resources=V1ResourceRequirements(requests={"memory": "256Mi"}, limits={"memory": "512Mi"}),
+        volume_mounts=[
+            V1VolumeMount(name="ceph-mount", mount_path="/output"),
+            V1VolumeMount(name="archive-mount", mount_path="/archive"),
+        ],
+        env=[
+            V1EnvVar(name="INSTRUMENT", value=instrument),
+            V1EnvVar(name="RUN_MONITOR_GROUP", value=f"{instrument.upper()}_run_monitor_{resource_uid}"),
+            V1EnvVar(name="GITHUB_API_TOKEN", value=GITHUB_API_TOKEN),
+            V1EnvVar(name="FIA_API_URL", value=FIA_API_URL),
+            V1EnvVar(name="VALKEY_HOST", value=VALKEY_HOST),
+            V1EnvVar(name="VALKEY_PORT", value=VALKEY_PORT),
+        ],
+    )
+
     pod_spec = V1PodSpec(
-        containers=[container],
+        containers=[container, epics_streamer_container, run_monitor_container],
         restart_policy="Always",
         service_account="live-data-operator",
         tolerations=[V1Toleration(key="staging", operator="Equal", value="big", effect="NoSchedule")],
@@ -386,7 +418,7 @@ def setup_deployment(
     )
 
 
-def start_live_data_processor(instrument: str) -> None:
+def start_live_data_processor(instrument: str, resource_uid: str) -> None:
     """
     Initialize and start the Live Data Processor for a given instrument.
 
@@ -395,12 +427,16 @@ def start_live_data_processor(instrument: str) -> None:
     it and recreating a new one in case of conflicts.
 
     :param instrument: The name of the instrument for which the live data processor is deployed.
+    :param resource_uid: LiveDataProcessor UID used to isolate the Kafka consumer group.
     :return: None
     """
-
-    body = setup_deployment(CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME)
+    body = setup_deployment(
+        CEPH_CREDS_SECRET_NAME, CLUSTER_ID, instrument, CEPH_CREDS_SECRET_NAMESPACE, FS_NAME, resource_uid
+    )
     body = ApiClient().sanitize_for_serialization(body)  # serialize so kopf may adopt it
     kopf.adopt(body)
+
+    logger.info("Creating Deployment for %s LiveDataProcessor...", instrument)
 
     try:
         AppsV1Api().create_namespaced_deployment(namespace=CEPH_CREDS_SECRET_NAMESPACE, body=body)
@@ -410,7 +446,7 @@ def start_live_data_processor(instrument: str) -> None:
             AppsV1Api().delete_namespaced_deployment(
                 name=f"livedataprocessor-{instrument}-deployment", namespace=CEPH_CREDS_SECRET_NAMESPACE
             )
-            start_live_data_processor(instrument)
+            start_live_data_processor(instrument, resource_uid)
         else:
             raise
 
@@ -418,7 +454,7 @@ def start_live_data_processor(instrument: str) -> None:
 @kopf.on.create("livedataprocessors")
 def create_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
-    Handles the creation of a LiveDataProcessor custom resource in Kubernetes.
+    Handle the creation of a LiveDataProcessor custom resource in Kubernetes.
 
     This function is triggered when a LiveDataProcessor custom resource is created
     in the Kubernetes cluster. It retrieves the instrument identifier from the resource
@@ -434,13 +470,13 @@ def create_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
     instrument = body["metadata"]["name"]
     logger.info(f"Creating LiveDataProcessor {body['metadata']['name']}")
-    start_live_data_processor(instrument)
+    start_live_data_processor(instrument, body["metadata"]["uid"])
 
 
 @kopf.on.resume("livedataprocessors")
 def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
-    Handles the resumption of a LiveDataProcessor custom resource in Kubernetes.
+    Handle the resumption of a LiveDataProcessor custom resource in Kubernetes.
 
     This function is invoked when a LiveDataProcessor custom resource is resumed in the Kubernetes cluster,
     such as after a pod restart or operator downtime and redeploys the processor.
@@ -455,4 +491,4 @@ def resume_fn(body: Any, spec: Any, **kwargs: Any) -> None:
     """
     instrument = body["metadata"]["name"]
     logger.info(f"Operator resumed, redeploying {instrument} LiveDataProcessor")
-    recreate_processor_deployment(instrument, CEPH_CREDS_SECRET_NAMESPACE)
+    recreate_processor_deployment(instrument, CEPH_CREDS_SECRET_NAMESPACE, body["metadata"]["uid"])

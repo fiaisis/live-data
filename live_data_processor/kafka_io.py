@@ -17,7 +17,7 @@ from streaming_data_types.fbschemas.run_stop_6s4t.RunStop import RunStop
 
 from live_data_processor.exceptions import OffsetNotFoundError, TopicIncompleteError
 
-INSTRUMENT = os.environ.get("INSTRUMENT_NAME", "Unknown Instrument").upper()
+INSTRUMENT = os.environ.get("INSTRUMENT", os.environ.get("INSTRUMENT_NAME", "Unknown Instrument")).upper()
 internal_logger = logging.getLogger(f"internal_{INSTRUMENT}")
 external_logger = logging.getLogger(f"external_{INSTRUMENT}")
 
@@ -26,7 +26,8 @@ KAFKA_PORT = int(os.environ.get("KAFKA_PORT", "31092"))
 
 
 def datetime_from_record_timestamp(timestamp: int) -> str:
-    """Convert a Kafka record timestamp (ms since epoch) to a readable string.
+    """
+    Convert a Kafka record timestamp (ms since epoch) to a readable string.
 
     :param timestamp: Milliseconds since Unix epoch from a Kafka record.
     :return: Timestamp formatted as YYYY-MM-DD HH:MM:SS in UTC.
@@ -36,14 +37,11 @@ def datetime_from_record_timestamp(timestamp: int) -> str:
 
 def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> RunStart | None:
     """
-    Find the latest RunStart message in the runinfo topic.
-
-    This function seeks to the end of the runinfo topic, retrieves the last few messages,
-    and searches for the most recent RunStart message.
-
-    :param runinfo_consumer: The Kafka consumer for the runinfo topic.
-    :return: The latest RunStart message if found, None otherwise.
-    :raises TopicIncompleteError: If the topic does not have any messages.
+    Find the most recent RunStart in the records inspected at the end of the run-info topic.
+    :param runinfo_consumer: The Kafka consumer for the run-info topic.
+    :param instrument: The instrument whose run-info partition is inspected.
+    :return: The latest RunStart found, or None if none is present.
+    :raises TopicIncompleteError: If no records can be read.
     """
     external_logger.info("Attempting to find the latest run start...")
     latest_start = None
@@ -51,8 +49,8 @@ def find_latest_run_start(runinfo_consumer: KafkaConsumer, instrument: str) -> R
     # Set the offset to 3 messages from the end.
     tp = TopicPartition(f"{instrument}_runInfo", 0)
     end_offset = runinfo_consumer.end_offsets([tp])
-    runinfo_consumer.seek(tp, end_offset[tp] - 3)
-
+    three_from_last = max(0, end_offset[tp] - 3)
+    runinfo_consumer.seek(tp, three_from_last)
     # Grab the last 3 messages, reverse their order, then find the latest runstart by iterating through.
     messages = []
     for index, message in enumerate(runinfo_consumer):
@@ -84,21 +82,19 @@ def seek_event_consumer_to_runstart(
     instrument: str,
     run_start: RunStart,
     events_consumer: KafkaConsumer,
-    streaming_kafka_sample_log: bool = False,
 ) -> None:
     """
-    Adjust the given event consumer's position to the beginning of the given run
-    :param run_start: The run start message to seek to.
-    :param events_consumer: The event consumer to seek to the run start message in.
-    :return: None
+    Seek the event consumer to the first Kafka record at or after the run start.
+    :param instrument: The instrument whose event topic is consumed.
+    :param run_start: The Kafka record that provides the run start time.
+    :param events_consumer: The Kafka consumer to reposition.
+    :return: None.
+    :raises OffsetNotFoundError: If Kafka has no event offset for that time.
     """
-
     run_start_ms = run_start.StartTime()
     timestamp = datetime_from_record_timestamp(run_start_ms)
     external_logger.info("Seeking event consumer to run start: %s", timestamp)
-    topics = (
-        [f"{instrument}_events", f"{instrument}_sampleEnv"] if streaming_kafka_sample_log else [f"{instrument}_events"]
-    )
+    topics = [f"{instrument}_events"]
     # Find the offset for a given time and seek to it
     for topic in topics:
         tp = TopicPartition(topic, 0)
@@ -116,18 +112,16 @@ def seek_event_consumer_to_runstart(
 def setup_consumers(
     instrument: str,
     kafka_config: dict[str, Any],
-    kafka_sample_log_streaming: bool = False,
 ) -> tuple[KafkaConsumer, KafkaConsumer]:
     """
-    Create the consumers for events and runinfo
-    :return: A tuple of KafkaConsumer objects for events and runinfo.
+    Create the consumers for the instrument's event and run-info topics.
+    :param instrument: The instrument whose topics are consumed.
+    :param kafka_config: The configuration shared by both consumers.
+    :return: The event consumer followed by the run-info consumer.
     """
     events_consumer = KafkaConsumer(**kafka_config)
     runinfo_consumer = KafkaConsumer(f"{instrument}_runInfo", consumer_timeout_ms=10000, **kafka_config)
-    if kafka_sample_log_streaming:
-        events_consumer.subscribe([f"{instrument}_events", f"{instrument}_sampleEnv"])
-    else:
-        events_consumer.subscribe([f"{instrument}_events"])
+    events_consumer.subscribe([f"{instrument}_events"])
     return events_consumer, runinfo_consumer
 
 

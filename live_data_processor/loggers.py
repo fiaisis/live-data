@@ -1,53 +1,79 @@
+"""Configure live-data logging and publish log records to Valkey."""
+
 import io
 import logging
 import os
+import queue
 import sys
+import threading
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 import redis
 
 VALKEY_HOST: str = os.environ.get("VALKEY_HOST", "localhost")
 VALKEY_PORT: int = int(os.environ.get("VALKEY_PORT", "6379"))
+MAX_DELIVERY_ATTEMPTS: int = 10
 
+# Global client for convenience; individual handlers will manage their own reconnection logic.
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 
 
 class ValkeyStreamHandler(logging.Handler):
-    """
-    Custom logging handler that pushes logs to a Valkey Stream.
-    """
+    """Logging handler that publishes formatted records to a Valkey stream."""
 
-    def __init__(self, client: redis.Redis, stream_key: str, maxlen: int = 2000) -> None:
-        """
-        Initialize the ValkeyStreamHandler.
-
-        :param client: An active Valkey (Redis) client connection.
-        :param stream_key: The stream key to push logs to.
-        :param maxlen: The maximum length of the stream before old logs are truncated. Defaults to 2000.
-        """
+    def __init__(
+        self,
+        client: redis.Redis,
+        stream_key: str,
+        maxlen: int = 2000,
+        queue_maxsize: int = 5000,
+        max_delivery_attempts: int = MAX_DELIVERY_ATTEMPTS,
+        backoff_base: float = 0.5,
+    ) -> None:
+        """Configure the stream destination and bounded log queue."""
         super().__init__()
         self.client = client
         self.stream_key = stream_key
         self.maxlen = maxlen
+        self._queue: queue.Queue[tuple[str, str, logging.LogRecord]] = queue.Queue(maxsize=queue_maxsize)
+        self._stop_event = threading.Event()
+        # Delivery retry configuration (exposed for testing)
+        self.max_delivery_attempts = max_delivery_attempts
+        self.backoff_base = backoff_base
 
     def emit(self, record: logging.LogRecord) -> None:
         """
-        Emit a record to the Valkey stream.
-
-        :param record: The log record to be formatted and emitted.
+        Publish a formatted log record to Valkey.
+        :param record: The log record to format and publish.
+        :return: None.
         """
         try:
             msg = self.format(record)
-            # Add the level directly to the Valkey stream dictionary
-            self.client.xadd(self.stream_key, {"msg": msg, "level": record.levelname}, maxlen=self.maxlen)
+            entry = (msg, record.levelname, record)
+            try:
+                # If queue is full, drop the oldest item to make room (discarding oldest is preferable
+                # to blocking or crashing the application).
+                self._queue.put(entry, block=False)
+                self.client.xadd(self.stream_key, {"msg": msg, "level": record.levelname}, maxlen=self.maxlen)
+            except queue.Full:
+                with suppress(Exception):
+                    # Remove one oldest item then enqueue current
+                    _ = self._queue.get(block=False)
+                try:
+                    self._queue.put(entry, block=False)
+                except Exception:
+                    # As a final fallback write to stderr so logs aren't silently lost
+                    with suppress(Exception):
+                        sys.stderr.write(f"[VALKEY DROP] {msg}\n")
         except Exception:
+            # Avoid any exception escaping from emit
             self.handleError(record)
 
 
 def setup_loggers(instrument_name: str) -> tuple[logging.Logger, logging.Logger, str]:
     """
-    Configures and returns the internal and external loggers for a specific instrument.
+    Configure and return the internal and external loggers for a specific instrument.
 
     :param instrument_name: The name of the instrument (CR) to construct logger and stream names.
     :return: A tuple containing the internal logger, external logger, and the Valkey stream key.
@@ -83,10 +109,7 @@ def setup_loggers(instrument_name: str) -> tuple[logging.Logger, logging.Logger,
 
 
 class TeeLoggerWriter(io.TextIOBase):
-    """
-    A file-like object that acts like a Tee.
-    It writes to the original stdout and sends a copy to a logger.
-    """
+    """File-like writer that mirrors standard output to a logger."""
 
     def __init__(self, original_stream: io.TextIOBase, logger: logging.Logger):
         """
@@ -120,10 +143,9 @@ class TeeLoggerWriter(io.TextIOBase):
 @contextmanager
 def capture_and_tee(logger: logging.Logger) -> Generator[None, None, None]:
     """
-    Context manager to redirect sys.stdout to both the console and the provided logger.
-
-    :param logger: The logger to mirror the stdout output to.
-    :yield: None
+    Mirror standard output to the supplied logger until the context exits.
+    :param logger: The logger to receive a copy of standard output.
+    :return: None.
     """
     original_stdout = sys.stdout
     # We pass the original sys.stdout and our external logger into the Tee

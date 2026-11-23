@@ -75,6 +75,7 @@ select = [
     "FLY", # flynt - prefer f string over .format
     "PERF", # Perflint - Flag performance antipatterns
     "RUF", # Ruff specific rules
+    "D", # pydocstyle - Docstring style checking
 ]
 ignore = [
     "S101", # flake8-bandit - Use of assert (all over pytest tests)
@@ -83,6 +84,7 @@ ignore = [
     "TCH003", # Conflicts with pydantic
     "TCH002", # Conflicts with pydantic
     "TCH001", # Conflicts with pydantic
+    "D104", "D203", "D205", "D211", "D212", "D400", "D415", # Match run-detection docstring rules
 ]
 
 [tool.ruff.lint.pylint]
