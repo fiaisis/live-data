@@ -147,6 +147,9 @@ def _configure_consumer() -> KafkaConsumer:
 def _is_run_start_message(message: Any) -> bool:
     """
     Check whether the Kafka message uses the RunStart schema.
+
+    The RunStart FlatBuffers schema declares `pl72` as its file identifier.
+
     :param message: The Kafka record to inspect.
     :return: True if the payload has the RunStart schema identifier.
     """
