@@ -3,7 +3,7 @@ name: Build and Push Docker Images
 on:
   push:
     branches:
-      - main
+      - staging/merlin-smoke-5dc4c7a
 
 env:
   REGISTRY: ghcr.io
