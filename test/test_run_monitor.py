@@ -1,4 +1,6 @@
 import json
+
+import pytest
 from unittest.mock import MagicMock, patch
 
 
@@ -101,3 +103,45 @@ def test_run_monitor_main_detects_run_start_message_in_partition_records():
 
     with patch("live_data_processor.run_monitor.get_schema", return_value="other"):
         assert run_monitor._is_run_start_message(mock_message) is False
+
+
+@pytest.mark.parametrize(
+    "replay_old_run", [False, True], ids=["fresh-group", "resumed-group"]
+)
+def test_monitor_publishes_new_run_without_reverting_startup_snapshot(replay_old_run):
+    def run(name, timestamp):
+        start = MagicMock()
+        start.RunName.return_value = name.encode()
+        start.StartTime.return_value = timestamp
+        return start
+
+    initial = run("MERLIN-002", 2000)
+    replayed = run("MERLIN-001", 1000)
+    latest = run("MERLIN-003", 3000)
+    records = [
+        MagicMock(value=start)
+        for start in ([replayed, latest] if replay_old_run else [initial, latest])
+    ]
+    consumer = MagicMock()
+    consumer.poll.side_effect = [{None: records}, KeyboardInterrupt()]
+    client = MagicMock()
+
+    with (
+        patch.object(run_monitor, "_discover_latest_run_start", return_value=initial),
+        patch.object(run_monitor, "_get_valkey_client", return_value=client),
+        patch.object(run_monitor, "KafkaConsumer", return_value=consumer) as factory,
+        patch.object(run_monitor, "_is_run_start_message", return_value=True),
+        patch.object(
+            run_monitor.RunStart,
+            "GetRootAsRunStart",
+            side_effect=lambda value, _: value,
+        ),
+    ):
+        run_monitor.main()
+
+    assert factory.call_args.kwargs["auto_offset_reset"] == "earliest"
+    assert factory.call_args.kwargs["enable_auto_commit"] is False
+    assert [
+        json.loads(call.args[1])["run_name"] for call in client.set.call_args_list
+    ] == ["MERLIN-002", "MERLIN-003"]
+    consumer.commit.assert_called_once()

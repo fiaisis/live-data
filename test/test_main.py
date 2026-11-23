@@ -172,3 +172,58 @@ def test_find_new_run_start(
     result = find_new_run_start(MagicMock(), current, "MERLIN00075500")
 
     assert result is (candidate if should_switch else None)
+
+
+def test_run_boundary_keeps_events_in_their_own_workspace(monkeypatch):
+    import datetime
+    from types import SimpleNamespace
+
+    import live_data_processor.main as processor
+
+    old_run = MagicMock(spec=RunStart)
+    old_run.RunName.return_value = b"old-run"
+    next_run = MagicMock(spec=RunStart)
+    next_run.RunName.return_value = b"next-run"
+    next_run.StartTime.return_value = 2000
+
+    old_events = [
+        SimpleNamespace(timestamp=timestamp, offset=timestamp)
+        for timestamp in (1998, 1999)
+    ]
+    next_event = SimpleNamespace(timestamp=2000, offset=2000)
+    events = MagicMock()
+    # Reinitializing seeks back to the first record for the new run.
+    events.__iter__.side_effect = [iter([*old_events, next_event]), iter([next_event])]
+    initialize = MagicMock(side_effect=[old_run, next_run, StopIteration])
+    process = MagicMock()
+    lifecycle = MagicMock()
+    lifecycle.attach_mock(initialize, "initialize")
+    lifecycle.attach_mock(process, "process")
+    detect = MagicMock(side_effect=[next_run, None])
+
+    real_datetime = datetime.datetime
+    baseline = real_datetime(2050, 1, 1, tzinfo=datetime.UTC)
+    ticks = iter(range(0, 100, 5))
+
+    class Clock(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return baseline + datetime.timedelta(seconds=next(ticks))
+
+    monkeypatch.setattr(processor.datetime, "datetime", Clock)
+    monkeypatch.setattr(processor, "initialize_run", initialize)
+    monkeypatch.setattr(processor, "process_message", process)
+    monkeypatch.setattr(processor, "find_new_run_start", detect)
+    monkeypatch.setattr(processor, "get_initial_reduction_function", MagicMock())
+
+    with pytest.raises(StopIteration):
+        processor.start_live_reduction(events, MagicMock())
+
+    assert [(call[0], call.args[-1]) for call in lifecycle.mock_calls] == [
+        ("initialize", None),
+        ("process", old_events[0]),
+        ("process", old_events[1]),
+        ("initialize", next_run),
+        ("process", next_event),
+        ("initialize", None),
+    ]

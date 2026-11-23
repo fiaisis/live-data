@@ -106,7 +106,8 @@ def _discover_latest_run_start() -> RunStart | None:
 
 def _configure_consumer() -> KafkaConsumer:
     kafka_config = _get_base_kafka_config()
-    kafka_config["group_id"] = RUN_MONITOR_GROUP
+    # A new group must see records published between discovery and its first poll.
+    kafka_config.update(group_id=RUN_MONITOR_GROUP, auto_offset_reset="earliest", enable_auto_commit=False)
     consumer = KafkaConsumer(**kafka_config)
     consumer.subscribe([RUNINFO_TOPIC])
     return consumer
@@ -121,6 +122,7 @@ def main() -> None:  # noqa: PLR0912, C901
     valkey_client = _get_valkey_client()
 
     current_run_name = None
+    current_start_time = None
     consumer = None
     try:
         latest_start = _discover_latest_run_start()
@@ -128,6 +130,7 @@ def main() -> None:  # noqa: PLR0912, C901
             current_run_name = extract_run_name(latest_start)
             if current_run_name is not None:
                 _publish_run_state(valkey_client, latest_start)
+                current_start_time = latest_start.StartTime()
 
         consumer = _configure_consumer()
         while True:
@@ -139,12 +142,13 @@ def main() -> None:  # noqa: PLR0912, C901
 
                     run_start = RunStart.GetRootAsRunStart(message.value, 0)
                     run_name = extract_run_name(run_start)
-                    if run_name is None or run_name == current_run_name:
+                    start_time = run_start.StartTime()
+                    if run_name is None or (current_start_time is not None and start_time <= current_start_time):
                         continue
 
-                    current_run_name = run_name
                     _publish_run_state(valkey_client, run_start)
-                    logger.info("Detected new run %s", current_run_name)
+                    current_start_time = start_time
+                    logger.info("Detected new run %s", run_name)
 
             if records:
                 consumer.commit()

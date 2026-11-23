@@ -1,7 +1,9 @@
 name: Build and Push Docker Images
 
-# Temporarily build and update staging on pushes to any branch.
-on: push
+on:
+  push:
+    branches:
+      - main
 
 env:
   REGISTRY: ghcr.io

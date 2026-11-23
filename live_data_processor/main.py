@@ -305,10 +305,25 @@ def start_live_reduction(  # noqa: C901, PLR0915
         )
 
         next_run_start = None
+        pending_run_start = None
         current_run_name = extract_run_name(current_run_start)
 
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
+            now = datetime.datetime.now(tz=datetime.UTC)
+            if pending_run_start is None and (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
+                run_last_checked_time = now
+                pending_run_start = find_new_run_start(runinfo_consumer, current_run_start, current_run_name)
+
+            # Use the same Kafka record timestamp as the seek for the next run.
+            if pending_run_start is not None and message.timestamp >= pending_run_start.StartTime():
+                next_run_start = pending_run_start
+                external_logger.info(
+                    "New run detected: RunStart message at %s",
+                    datetime_from_record_timestamp(next_run_start.StartTime()),
+                )
+                break
+
             process_message(message)
             # Optional: Log lag every 100000 messages to avoid spamming the broker
             if message.offset % 100000 == 0:
@@ -359,18 +374,6 @@ def start_live_reduction(  # noqa: C901, PLR0915
                         "Script will execute again in %s seconds",
                         SCRIPT_EXECUTION_INTERVAL,
                     )
-
-            # Check for new run
-            now = datetime.datetime.now(tz=datetime.UTC)
-            if (now - run_last_checked_time).total_seconds() > RUN_CHECK_INTERVAL:
-                run_last_checked_time = now
-                next_run_start = find_new_run_start(runinfo_consumer, current_run_start, current_run_name)
-                if next_run_start is not None:
-                    external_logger.info(
-                        "New run detected: RunStart message at %s",
-                        datetime_from_record_timestamp(next_run_start.StartTime()),
-                    )
-                    break
 
         current_run_start = next_run_start
 
