@@ -227,3 +227,142 @@ def test_run_boundary_keeps_events_in_their_own_workspace(monkeypatch):
         ("process", next_event),
         ("initialize", None),
     ]
+
+
+def _make_ev42_event(
+    pulse_time_ns: int,
+    tofs: list[int],
+    det_ids: list[int],
+    isis_specific: dict[str, int | float] | None = None,
+):
+    """Build a real ev42 EventMessage FlatBuffer with optional is84 ISISData."""
+    from streaming_data_types.eventdata_ev42 import serialise_ev42
+    from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMessage
+
+    buf = serialise_ev42(
+        source_name="merlin",
+        message_id=1,
+        pulse_time=pulse_time_ns,
+        time_of_flight=tofs,
+        detector_id=det_ids,
+        isis_specific=isis_specific,
+    )
+    return EventMessage.GetRootAsEventMessage(buf, 0)
+
+
+def test_extract_isis_proton_charge_running_setup_and_none():
+    """Verify is84 proton_charge extraction for RUNNING, SETUP, and missing ISISData."""
+    from streaming_data_types.fbschemas.isis_event_info_is84.RunState import RunState
+
+    from live_data_processor.main import extract_isis_proton_charge
+
+    running_ev = _make_ev42_event(
+        pulse_time_ns=1_795_684_408_723_078_656,
+        tofs=[1000],
+        det_ids=[1],
+        isis_specific={
+            "period_number": 0,
+            "run_state": RunState.RUNNING,
+            "proton_charge": 0.00125,
+        },
+    )
+    setup_ev = _make_ev42_event(
+        pulse_time_ns=1_795_684_408_723_078_656,
+        tofs=[1000],
+        det_ids=[1],
+        isis_specific={
+            "period_number": 0,
+            "run_state": RunState.SETUP,
+            "proton_charge": 0.00125,
+        },
+    )
+    plain_ev = _make_ev42_event(
+        pulse_time_ns=1_795_684_408_723_078_656,
+        tofs=[1000],
+        det_ids=[1],
+        isis_specific=None,
+    )
+
+    assert extract_isis_proton_charge(running_ev) == pytest.approx(0.00125)
+    assert extract_isis_proton_charge(setup_ev) is None
+    assert extract_isis_proton_charge(plain_ev) is None
+
+
+def test_process_events_deduplicates_proton_charge_per_pulse(monkeypatch):
+    """Verify multiple ev42 cards sharing a pulse timestamp only record proton_charge once."""
+    from streaming_data_types.fbschemas.isis_event_info_is84.RunState import RunState
+
+    import live_data_processor.main as processor
+
+    mock_prop = MagicMock()
+    mock_run = MagicMock()
+    mock_run.hasProperty.return_value = True
+    mock_run.getProperty.return_value = mock_prop
+    mock_ws = MagicMock()
+    mock_ws.getRun.return_value = mock_run
+
+    monkeypatch.setattr(processor, "LAST_PROTON_CHARGE_PULSE_NS", None)
+    monkeypatch.setattr(processor, "mtd", {processor.LIVE_WS_NAME: mock_ws})
+    monkeypatch.setattr(processor, "DateAndTime", lambda ns: f"dt:{ns}")
+
+    pulse_1 = 1_795_684_408_723_078_656
+    pulse_2 = 1_795_684_408_743_001_600
+    isis_1 = {
+        "period_number": 0,
+        "run_state": RunState.RUNNING,
+        "proton_charge": 0.00116,
+    }
+    isis_2 = {
+        "period_number": 0,
+        "run_state": RunState.RUNNING,
+        "proton_charge": 0.00117,
+    }
+
+    # Three DAE cards for pulse_1, then one card for pulse_2
+    processor.process_events(_make_ev42_event(pulse_1, [1000], [1], isis_1))
+    processor.process_events(_make_ev42_event(pulse_1, [2000], [2], isis_1))
+    processor.process_events(_make_ev42_event(pulse_1, [3000], [3], isis_1))
+    processor.process_events(_make_ev42_event(pulse_2, [4000], [4], isis_2))
+
+    assert mock_prop.addValue.call_count == 2
+    first_call, second_call = mock_prop.addValue.call_args_list
+    assert first_call.args[0] == f"dt:{pulse_1 - processor.UNIX_TO_MANTID_OFFSET_NS}"
+    assert first_call.args[1] == pytest.approx(0.00116)
+    assert second_call.args[0] == f"dt:{pulse_2 - processor.UNIX_TO_MANTID_OFFSET_NS}"
+    assert second_call.args[1] == pytest.approx(0.00117)
+
+
+def test_process_events_records_proton_charge_on_empty_event_frame(monkeypatch):
+    """Verify frames with zero neutron events still record proton_charge."""
+    from streaming_data_types.fbschemas.isis_event_info_is84.RunState import RunState
+
+    import live_data_processor.main as processor
+
+    mock_prop = MagicMock()
+    mock_run = MagicMock()
+    mock_run.hasProperty.return_value = True
+    mock_run.getProperty.return_value = mock_prop
+    mock_ws = MagicMock()
+    mock_ws.getRun.return_value = mock_run
+
+    monkeypatch.setattr(processor, "LAST_PROTON_CHARGE_PULSE_NS", None)
+    monkeypatch.setattr(processor, "mtd", {processor.LIVE_WS_NAME: mock_ws})
+    monkeypatch.setattr(processor, "DateAndTime", lambda ns: f"dt:{ns}")
+
+    pulse = 1_795_684_408_803_294_720
+    empty_ev = _make_ev42_event(
+        pulse,
+        tofs=[],
+        det_ids=[],
+        isis_specific={
+            "period_number": 0,
+            "run_state": RunState.RUNNING,
+            "proton_charge": 0.0012,
+        },
+    )
+
+    processor.process_events(empty_ev)
+
+    mock_prop.addValue.assert_called_once()
+    assert mock_prop.addValue.call_args.args[1] == pytest.approx(0.0012)
+    mock_ws.getSpectrum.assert_not_called()

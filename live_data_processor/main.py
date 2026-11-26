@@ -19,12 +19,16 @@ from typing import Any
 from kafka import KafkaConsumer
 from mantid import ConfigService
 from mantid.api import mtd
+from mantid.kernel import FloatTimeSeriesProperty
 from mantid.kernel._kernel import DateAndTime
 from mantid.simpleapi import (
     AddTimeSeriesLog,
     RemoveWorkspaceHistory,
 )
 from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMessage
+from streaming_data_types.fbschemas.eventdata_ev42.FacilityData import FacilityData
+from streaming_data_types.fbschemas.isis_event_info_is84.ISISData import ISISData
+from streaming_data_types.fbschemas.isis_event_info_is84.RunState import RunState
 from streaming_data_types.fbschemas.run_start_pl72.RunStart import RunStart
 from streaming_data_types.utils import get_schema
 
@@ -93,6 +97,65 @@ LOG_COOLDOWN = 30.0
 CATCHUP_START_TIME = time.time()  # Start timing as soon as the script begins
 IS_CATCHING_UP = True  # Assume we start in a catch-up state
 REALTIME_LAG_THRESHOLD = 1.5
+LAST_PROTON_CHARGE_PULSE_NS: int | None = None
+
+
+def extract_isis_proton_charge(events: EventMessage) -> float | None:
+    """
+    Extract per-frame proton charge (uAh) from ISIS-specific event data, if present and running.
+    :param events: The decoded Kafka ev42 EventMessage.
+    :return: The proton charge in uAh, or None if unavailable or not in RUNNING state.
+    """
+    if events.FacilitySpecificDataType() != FacilityData.ISISData:
+        return None
+    specific = events.FacilitySpecificData()
+    if specific is None:
+        return None
+    isis_data = ISISData()
+    isis_data.Init(specific.Bytes, specific.Pos)
+    if isis_data.RunState() != RunState.RUNNING:
+        return None
+    return float(isis_data.ProtonCharge())
+
+
+def _record_proton_charge(
+    ws: Any,
+    raw_pulse_time_ns: int,
+    pulse_time: DateAndTime,
+    events: EventMessage,
+) -> None:
+    """
+    Record deduplicated per-pulse proton charge on the workspace's proton_charge log.
+    :param ws: The live Mantid EventWorkspace.
+    :param raw_pulse_time_ns: The Unix pulse timestamp in nanoseconds.
+    :param pulse_time: The Mantid DateAndTime for the pulse.
+    :param events: The decoded Kafka ev42 EventMessage.
+    :return: None.
+    """
+    global LAST_PROTON_CHARGE_PULSE_NS  # noqa: PLW0603
+    if raw_pulse_time_ns == LAST_PROTON_CHARGE_PULSE_NS:
+        return
+    proton_charge = extract_isis_proton_charge(events)
+    if proton_charge is None:
+        return
+    run = ws.getRun()
+    if not run.hasProperty("proton_charge"):
+        prop = FloatTimeSeriesProperty("proton_charge")
+        prop.units = "uAh"
+        run.addProperty("proton_charge", prop, True)
+    run.getProperty("proton_charge").addValue(pulse_time, proton_charge)
+    LAST_PROTON_CHARGE_PULSE_NS = raw_pulse_time_ns
+
+
+def _integrate_proton_charge(ws: Any) -> None:
+    """
+    Integrate the workspace's proton_charge time-series log into gd_prtn_chrg, if present.
+    :param ws: The live Mantid EventWorkspace.
+    :return: None.
+    """
+    run = ws.getRun()
+    if run.hasProperty("proton_charge"):
+        run.integrateProtonCharge()
 
 
 def get_event_temporal_lag(events: EventMessage) -> float:
@@ -121,6 +184,10 @@ def process_events(events: EventMessage) -> None:
     global LAST_LOG_TIME, IS_CATCHING_UP  # noqa: PLW0603
 
     raw_pulse_time_ns = events.PulseTime()
+    pulse_time = DateAndTime(raw_pulse_time_ns - UNIX_TO_MANTID_OFFSET_NS)
+    ws = mtd[LIVE_WS_NAME]
+    _record_proton_charge(ws, raw_pulse_time_ns, pulse_time, events)
+
     times_of_flight = events.TimeOfFlightAsNumpy()
 
     if len(times_of_flight) == 0:
@@ -145,14 +212,10 @@ def process_events(events: EventMessage) -> None:
             # Subtle heartbeat so you know it's still alive
             external_logger.info("Operating in real-time.")
         LAST_LOG_TIME = now
-    times_of_flight = events.TimeOfFlightAsNumpy()
     detector_ids = events.DetectorIdAsNumpy()
-    pulse_time = DateAndTime(events.PulseTime() - UNIX_TO_MANTID_OFFSET_NS)
-    ws = mtd[LIVE_WS_NAME]
-    if len(times_of_flight) > 0:
-        for detector_id, tof in zip(detector_ids, times_of_flight, strict=False):
-            spectra = ws.getSpectrum(int(detector_id))
-            spectra.addEventQuickly(tof / 1000.0, pulse_time)
+    for detector_id, tof in zip(detector_ids, times_of_flight, strict=False):
+        spectra = ws.getSpectrum(int(detector_id))
+        spectra.addEventQuickly(tof / 1000.0, pulse_time)
 
 
 def _shutdown(signum: int, frame: FrameType | None) -> None:
@@ -184,6 +247,7 @@ def initialize_run(
     :return: The RunStart message that was resolved and used to initialize the run.
     :raises TopicIncompleteError: If no RunStart message can be found on runInfo.
     """
+    global LAST_PROTON_CHARGE_PULSE_NS  # noqa: PLW0603
     external_logger.info("Initializing run: %s", str(run_start))
 
     if run_start is None:
@@ -192,6 +256,7 @@ def initialize_run(
         if run_start is None:
             raise TopicIncompleteError("No RunStart found in runInfo")
     initialize_instrument_workspace(INSTRUMENT, LIVE_WS_NAME, run_start)
+    LAST_PROTON_CHARGE_PULSE_NS = None
     seek_event_consumer_to_runstart(INSTRUMENT, run_start, events_consumer)
     return run_start
 
@@ -354,6 +419,7 @@ def start_live_reduction(  # noqa: C901, PLR0915
                             )
 
                     ws = mtd[LIVE_WS_NAME]
+                    _integrate_proton_charge(ws)
                     RemoveWorkspaceHistory(ws)
                     external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
                     external_logger.info("Executing reduction script")
