@@ -118,7 +118,7 @@ def extract_isis_proton_charge(events: EventMessage) -> float | None:
     return float(isis_data.ProtonCharge())
 
 
-def _record_proton_charge(
+def record_proton_charge(
     ws: Any,
     pulse_time: DateAndTime,
     events: EventMessage,
@@ -147,7 +147,7 @@ def _record_proton_charge(
     prop.addValue(pulse_time, proton_charge)
 
 
-def _integrate_proton_charge(ws: Any) -> None:
+def integrate_proton_charge(ws: Any) -> None:
     """
     Integrate the workspace's proton_charge time-series log into gd_prtn_chrg, if present.
     :param ws: The live Mantid EventWorkspace.
@@ -159,20 +159,28 @@ def _integrate_proton_charge(ws: Any) -> None:
 
 
 @dataclass
-class _EpicsCursor:
-    """Mutable cursor tracking the last Valkey EPICS stream ID successfully applied."""
+class EpicsCursor:
+    """
+    Track progress through the Valkey EPICS stream for the active run.
+
+    Stored as a mutable object rather than a plain string so the stream position
+    persists across partial failures: if applying a batch of EPICS entries fails
+    midway, ``last_id`` still points to the last entry that succeeded and the next
+    reduction cycle resumes without replaying already-applied logs.
+    """
 
     last_id: str = "0-0"
 
 
-def _parse_latest_epics_entry(raw_entry: str) -> tuple[str | None, datetime.datetime | None]:
+def parse_latest_epics_entry(raw_entry: str) -> tuple[str | None, datetime.datetime | None]:
     """
     Parse a JSON-encoded latest EPICS snapshot entry into its value and UTC timestamp.
-    :param raw_entry: Raw string stored in the epics_latest Valkey hash.
+    :param raw_entry: Raw JSON string stored in the epics_latest Valkey hash.
     :return: Tuple of (value, timestamp) or (None, None) if malformed.
     """
     try:
         parsed = json.loads(raw_entry)
+        # Reject legacy plain-string or non-object entries from earlier deployments.
         if not isinstance(parsed, dict):
             return None, None
         value = parsed.get("value")
@@ -180,6 +188,7 @@ def _parse_latest_epics_entry(raw_entry: str) -> tuple[str | None, datetime.date
         if not isinstance(value, str) or not value or not isinstance(ts_str, str) or not ts_str:
             return None, None
         sample_dt = datetime.datetime.fromisoformat(ts_str)
+        # Normalise to timezone-aware UTC so comparisons against run_start_dt are always valid.
         if sample_dt.tzinfo is None:
             sample_dt = sample_dt.replace(tzinfo=datetime.UTC)
         else:
@@ -189,7 +198,7 @@ def _parse_latest_epics_entry(raw_entry: str) -> tuple[str | None, datetime.date
     return value, sample_dt
 
 
-def _load_epics_logs(ws: Any, cursor: _EpicsCursor, run_start_dt: datetime.datetime) -> None:
+def load_epics_logs(ws: Any, cursor: EpicsCursor, run_start_dt: datetime.datetime) -> None:
     """
     Append new EPICS stream updates to the workspace and backfill missing blocks from the latest snapshot.
 
@@ -211,6 +220,8 @@ def _load_epics_logs(ws: Any, cursor: _EpicsCursor, run_start_dt: datetime.datet
     epics_stream_key = f"instrument:{INSTRUMENT}:epics_stream"
     epics_latest_key = f"instrument:{INSTRUMENT}:epics_latest"
 
+    # Only read entries that have not already been applied to the workspace.
+    # Valkey uses "(" to specify an exclusive stream ID boundary.
     min_id = "-" if cursor.last_id == "0-0" else f"({cursor.last_id}"
     epics_logs = VALKEY_CLIENT.xrange(epics_stream_key, min_id, "+")
 
@@ -226,18 +237,28 @@ def _load_epics_logs(ws: Any, cursor: _EpicsCursor, run_start_dt: datetime.datet
                 timestamp,
                 value,
             )
+
+        # Advance after each entry to avoid replaying successfully applied
+        # measurements if a subsequent entry fails.
         cursor.last_id = entry_id
 
     run = ws.getRun()
     run_start_iso = run_start_dt.strftime("%Y-%m-%dT%H:%M:%S")
     latest_values = VALKEY_CLIENT.hgetall(epics_latest_key)
+
+    # Backfill missing sample logs whose updates may have been evicted
+    # from the bounded stream or occurred before run initialisation.
     for block_name, raw_entry in latest_values.items():
         if not block_name or run.hasProperty(block_name):
             continue
-        value, sample_dt = _parse_latest_epics_entry(raw_entry)
+        value, sample_dt = parse_latest_epics_entry(raw_entry)
         if value is None or sample_dt is None:
             internal_logger.warning("Skipping malformed epics_latest entry for %s", block_name)
             continue
+
+        # Carry pre-run values forward to the run start so they fall within
+        # the reduction window. Preserve actual timestamps for in-run
+        # measurements to avoid inventing historical instrument state.
         if sample_dt <= run_start_dt:
             backfill_ts = run_start_iso
         else:
@@ -285,7 +306,7 @@ def process_events(events: EventMessage) -> None:
     raw_pulse_time_ns = events.PulseTime()
     pulse_time = DateAndTime(raw_pulse_time_ns - UNIX_TO_MANTID_OFFSET_NS)
     ws = mtd[LIVE_WS_NAME]
-    _record_proton_charge(ws, pulse_time, events)
+    record_proton_charge(ws, pulse_time, events)
 
     times_of_flight = events.TimeOfFlightAsNumpy()
 
@@ -471,7 +492,7 @@ def start_live_reduction(  # noqa: PLR0915
         pending_run_start = None
         current_run_name = extract_run_name(current_run_start)
         run_start_dt = datetime.datetime.fromtimestamp(current_run_start.StartTime() / 1000.0, tz=datetime.UTC)
-        epics_cursor = _EpicsCursor()
+        epics_cursor = EpicsCursor()
 
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
@@ -507,8 +528,8 @@ def start_live_reduction(  # noqa: PLR0915
             if (now - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
                 try:
                     ws = mtd[LIVE_WS_NAME]
-                    _load_epics_logs(ws, epics_cursor, run_start_dt)
-                    _integrate_proton_charge(ws)
+                    load_epics_logs(ws, epics_cursor, run_start_dt)
+                    integrate_proton_charge(ws)
                     RemoveWorkspaceHistory(ws)
                     external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
                     external_logger.info("Executing reduction script")

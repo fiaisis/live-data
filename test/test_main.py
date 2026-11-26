@@ -440,8 +440,8 @@ def test_load_epics_logs_reads_stream_incrementally_and_backfills_from_hash(
     monkeypatch.setattr(processor, "AddTimeSeriesLog", fake_add_log)
 
     run_start_dt = datetime.datetime(2026, 11, 26, 9, 0, 0, tzinfo=datetime.UTC)
-    cursor = processor._EpicsCursor()
-    processor._load_epics_logs(mock_ws, cursor, run_start_dt)
+    cursor = processor.EpicsCursor()
+    processor.load_epics_logs(mock_ws, cursor, run_start_dt)
 
     assert cursor.last_id == "100-0"
     assert recorded_calls == [
@@ -453,7 +453,7 @@ def test_load_epics_logs_reads_stream_incrementally_and_backfills_from_hash(
 
     # Second reduction: only reads entries strictly after 100-0 and does not re-add backfilled blocks
     recorded_calls.clear()
-    processor._load_epics_logs(mock_ws, cursor, run_start_dt)
+    processor.load_epics_logs(mock_ws, cursor, run_start_dt)
 
     assert cursor.last_id == "100-0"
     assert recorded_calls == []
@@ -518,17 +518,17 @@ def test_load_epics_logs_partial_failure_does_not_duplicate_applied_entries(
     monkeypatch.setattr(processor, "AddTimeSeriesLog", flaky_add_log)
 
     run_start_dt = datetime.datetime(2026, 11, 26, 9, 0, 0, tzinfo=datetime.UTC)
-    cursor = processor._EpicsCursor()
+    cursor = processor.EpicsCursor()
 
     # First attempt fails on entry_2 after entry_1 succeeded
     with pytest.raises(RuntimeError, match="transient Mantid failure"):
-        processor._load_epics_logs(mock_ws, cursor, run_start_dt)
+        processor.load_epics_logs(mock_ws, cursor, run_start_dt)
 
     assert cursor.last_id == "100-0"
     assert recorded_calls == [("Chopper_Speed", "2026-11-26T09:01:00+00:00", "250.0")]
 
     # Next reduction resumes strictly after 100-0; entry_1 is NOT duplicated, entry_2 and entry_3 succeed
-    processor._load_epics_logs(mock_ws, cursor, run_start_dt)
+    processor.load_epics_logs(mock_ws, cursor, run_start_dt)
 
     assert cursor.last_id == "102-0"
     assert mock_valkey.xrange.call_args_list[1].args[1:] == ("(100-0", "+")
