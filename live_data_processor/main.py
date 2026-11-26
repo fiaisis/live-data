@@ -288,15 +288,22 @@ def initialize_run(
     :return: The RunStart message that was resolved and used to initialize the run.
     :raises TopicIncompleteError: If no RunStart message can be found on runInfo.
     """
-    external_logger.info("Initializing run: %s", str(run_start))
+    global CATCHUP_START_TIME, IS_CATCHING_UP  # noqa: PLW0603
 
     if run_start is None:
-        external_logger.info("Run Start is None")
+        external_logger.info("Initializing latest run...")
         run_start = find_latest_run_start(runinfo_consumer, INSTRUMENT)
         if run_start is None:
             raise TopicIncompleteError("No RunStart found in runInfo")
+
+    run_name = extract_run_name(run_start) or "unknown"
+    run_start_str = datetime_from_record_timestamp(run_start.StartTime())
+    external_logger.info("Initializing run %s (started at %s)", run_name, run_start_str)
+
     initialize_instrument_workspace(INSTRUMENT, LIVE_WS_NAME, run_start)
     seek_event_consumer_to_runstart(INSTRUMENT, run_start, events_consumer)
+    CATCHUP_START_TIME = time.time()
+    IS_CATCHING_UP = True
     return run_start
 
 

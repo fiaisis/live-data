@@ -442,3 +442,32 @@ def test_load_epics_logs_reads_stream_incrementally_and_backfills_from_hash(
     assert last_id == "100-0"
     assert recorded_calls == []
     assert mock_valkey.xrange.call_args_list[1].args[1:] == ("(100-0", "+")
+
+
+@patch("live_data_processor.main.seek_event_consumer_to_runstart")
+@patch("live_data_processor.main.initialize_instrument_workspace")
+def test_initialize_run_logs_clean_run_info_and_resets_catchup(
+    _mock_workspace, _mock_seek, monkeypatch
+):
+    """Verify initialize_run logs run name/timestamp cleanly and resets catch-up tracking."""
+    import live_data_processor.main as processor
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(processor, "external_logger", mock_logger)
+    monkeypatch.setattr(processor, "CATCHUP_START_TIME", 0.0)
+    monkeypatch.setattr(processor, "IS_CATCHING_UP", False)
+    monkeypatch.setattr(processor.time, "time", lambda: 1234.5)
+
+    run_start = MagicMock(spec=RunStart)
+    run_start.RunName.return_value = b"MERLIN00075560"
+    run_start.StartTime.return_value = 1_795_686_879_000  # 2026-11-26 09:54:39 UTC
+
+    processor.initialize_run(MagicMock(), MagicMock(), run_start=run_start)
+
+    assert processor.CATCHUP_START_TIME == 1234.5
+    assert processor.IS_CATCHING_UP is True
+    mock_logger.info.assert_called_once_with(
+        "Initializing run %s (started at %s)",
+        "MERLIN00075560",
+        "2026-11-26 09:54:39",
+    )
