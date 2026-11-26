@@ -1,3 +1,4 @@
+import json
 import zlib
 from unittest.mock import MagicMock, patch
 
@@ -47,8 +48,10 @@ def test_main_valkey_xadd(mock_init_pvs, valkey_client_mock):
             with pytest.raises(Exception, match="Break loop"):
                 main()
 
-    valkey_client_mock.xadd.assert_called_once()
-    args, kwargs = valkey_client_mock.xadd.call_args
+    valkey_client_mock.pipeline.assert_called_once_with(transaction=True)
+    pipe = valkey_client_mock.pipeline.return_value.__enter__.return_value
+    pipe.xadd.assert_called_once()
+    args, kwargs = pipe.xadd.call_args
     # args[0] is STREAM_KEY, args[1] is the fields dict
     assert "epics_stream" in args[0]
     fields = args[1]
@@ -57,11 +60,15 @@ def test_main_valkey_xadd(mock_init_pvs, valkey_client_mock):
     assert fields["timestamp"] == "2023-11-14T22:13:20+00:00"
     assert kwargs["maxlen"] == 10000
 
-    valkey_client_mock.hset.assert_called_once()
-    hset_args, _ = valkey_client_mock.hset.call_args
+    pipe.hset.assert_called_once()
+    hset_args, _ = pipe.hset.call_args
     assert "epics_latest" in hset_args[0]
     assert hset_args[1] == "TestBlock"
-    assert hset_args[2] == "42.5"
+    assert json.loads(hset_args[2]) == {
+        "value": "42.5",
+        "timestamp": "2023-11-14T22:13:20+00:00",
+    }
+    pipe.execute.assert_called_once()
 
 
 @patch("live_data_processor.epics_streamer.init_pvs")
@@ -75,8 +82,9 @@ def test_main_valkey_connection_error_handled(mock_init_pvs, valkey_client_mock)
         Exception("Break loop"),
     ]
 
-    # Force XADD to raise a ConnectionError, which should be caught and sleep for 1 sec
-    valkey_client_mock.xadd.side_effect = redis.ConnectionError("Connection lost")
+    # Force pipeline execute to raise a ConnectionError, which should be caught and sleep for 1 sec
+    pipe = valkey_client_mock.pipeline.return_value.__enter__.return_value
+    pipe.execute.side_effect = redis.ConnectionError("Connection lost")
 
     # Prevent logger from creating Valkey handlers that use queue.Queue
     with patch(
@@ -103,7 +111,8 @@ def test_main_valkey_other_error_raises(mock_init_pvs, valkey_client_mock):
         Exception("Break loop"),
     ]
 
-    valkey_client_mock.xadd.side_effect = Exception("Unexpected error")
+    pipe = valkey_client_mock.pipeline.return_value.__enter__.return_value
+    pipe.execute.side_effect = Exception("Unexpected error")
 
     # Prevent logger from creating Valkey handlers that use queue.Queue
     with patch(

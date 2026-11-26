@@ -13,6 +13,7 @@ import signal
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from types import FrameType
 from typing import Any
 
@@ -157,18 +158,60 @@ def _integrate_proton_charge(ws: Any) -> None:
         run.integrateProtonCharge()
 
 
-def _load_epics_logs(ws: Any, last_epics_id: str, run_start_iso: str) -> str:
+@dataclass
+class _EpicsCursor:
+    """Mutable cursor tracking the last Valkey EPICS stream ID successfully applied."""
+
+    last_id: str = "0-0"
+
+
+def _parse_latest_epics_entry(raw_entry: str) -> tuple[str | None, datetime.datetime | None]:
+    """
+    Parse a JSON-encoded latest EPICS snapshot entry into its value and UTC timestamp.
+    :param raw_entry: Raw string stored in the epics_latest Valkey hash.
+    :return: Tuple of (value, timestamp) or (None, None) if malformed.
+    """
+    try:
+        parsed = json.loads(raw_entry)
+        if not isinstance(parsed, dict):
+            return None, None
+        value = parsed.get("value")
+        ts_str = parsed.get("timestamp")
+        if not isinstance(value, str) or not value or not isinstance(ts_str, str) or not ts_str:
+            return None, None
+        sample_dt = datetime.datetime.fromisoformat(ts_str)
+        if sample_dt.tzinfo is None:
+            sample_dt = sample_dt.replace(tzinfo=datetime.UTC)
+        else:
+            sample_dt = sample_dt.astimezone(datetime.UTC)
+    except (ValueError, TypeError):
+        return None, None
+    return value, sample_dt
+
+
+def _load_epics_logs(ws: Any, cursor: _EpicsCursor, run_start_dt: datetime.datetime) -> None:
     """
     Append new EPICS stream updates to the workspace and backfill missing blocks from the latest snapshot.
+
+    The cursor advances immediately after each stream entry is applied so a partial failure
+    does not replay already-applied entries on the next reduction cycle.
+
+    For blocks missing from the workspace:
+    - If the snapshot timestamp is at or before run_start_dt, the block has been unchanged
+      since before the run started and is stamped at run_start_dt so it lies within [t0, t1].
+    - If the snapshot timestamp is after run_start_dt, the block changed during the run
+      (e.g., after a mid-run restart or stream eviction) and is recorded at its true original
+      timestamp rather than backdated to run_start_dt.
+
     :param ws: The live Mantid EventWorkspace.
-    :param last_epics_id: The last Valkey stream entry ID already loaded, or "0-0" if none.
-    :param run_start_iso: ISO-8601 UTC timestamp of the current run start for backfilled static logs.
-    :return: The updated last Valkey stream entry ID.
+    :param cursor: Mutable cursor holding the last successfully applied Valkey stream ID.
+    :param run_start_dt: UTC datetime of the current run start.
+    :return: None.
     """
     epics_stream_key = f"instrument:{INSTRUMENT}:epics_stream"
     epics_latest_key = f"instrument:{INSTRUMENT}:epics_latest"
 
-    min_id = "-" if last_epics_id == "0-0" else f"({last_epics_id}"
+    min_id = "-" if cursor.last_id == "0-0" else f"({cursor.last_id}"
     epics_logs = VALKEY_CLIENT.xrange(epics_stream_key, min_id, "+")
 
     for entry_id, data in epics_logs:
@@ -183,20 +226,35 @@ def _load_epics_logs(ws: Any, last_epics_id: str, run_start_iso: str) -> str:
                 timestamp,
                 value,
             )
-        last_epics_id = entry_id
+        cursor.last_id = entry_id
 
     run = ws.getRun()
+    run_start_iso = run_start_dt.strftime("%Y-%m-%dT%H:%M:%S")
     latest_values = VALKEY_CLIENT.hgetall(epics_latest_key)
-    for block_name, value in latest_values.items():
-        if block_name and value and not run.hasProperty(block_name):
-            AddTimeSeriesLog(
-                LIVE_WS_NAME,
+    for block_name, raw_entry in latest_values.items():
+        if not block_name or run.hasProperty(block_name):
+            continue
+        value, sample_dt = _parse_latest_epics_entry(raw_entry)
+        if value is None or sample_dt is None:
+            internal_logger.warning("Skipping malformed epics_latest entry for %s", block_name)
+            continue
+        if sample_dt <= run_start_dt:
+            backfill_ts = run_start_iso
+        else:
+            backfill_ts = sample_dt.isoformat()
+            internal_logger.warning(
+                "Backfilling %s from epics_latest at its true timestamp %s (after run start %s); "
+                "earlier in-run values may be missing",
                 block_name,
+                backfill_ts,
                 run_start_iso,
-                value,
             )
-
-    return last_epics_id
+        AddTimeSeriesLog(
+            LIVE_WS_NAME,
+            block_name,
+            backfill_ts,
+            value,
+        )
 
 
 def get_event_temporal_lag(events: EventMessage) -> float:
@@ -412,8 +470,8 @@ def start_live_reduction(  # noqa: PLR0915
         next_run_start = None
         pending_run_start = None
         current_run_name = extract_run_name(current_run_start)
-        run_start_iso = datetime_from_record_timestamp(current_run_start.StartTime()).replace(" ", "T")
-        last_epics_id = "0-0"
+        run_start_dt = datetime.datetime.fromtimestamp(current_run_start.StartTime() / 1000.0, tz=datetime.UTC)
+        epics_cursor = _EpicsCursor()
 
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
@@ -449,7 +507,7 @@ def start_live_reduction(  # noqa: PLR0915
             if (now - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
                 try:
                     ws = mtd[LIVE_WS_NAME]
-                    last_epics_id = _load_epics_logs(ws, last_epics_id, run_start_iso)
+                    _load_epics_logs(ws, epics_cursor, run_start_dt)
                     _integrate_proton_charge(ws)
                     RemoveWorkspaceHistory(ws)
                     external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())

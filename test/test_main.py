@@ -388,7 +388,10 @@ def test_process_events_records_proton_charge_on_empty_event_frame(monkeypatch):
 def test_load_epics_logs_reads_stream_incrementally_and_backfills_from_hash(
     monkeypatch,
 ):
-    """Verify _load_epics_logs drains new stream entries and backfills missing static blocks from epics_latest."""
+    """Verify _load_epics_logs drains stream incrementally and handles pre-run vs mid-run hash timestamps."""
+    import datetime
+    import json
+
     import live_data_processor.main as processor
 
     present_props: set[str] = set()
@@ -418,30 +421,122 @@ def test_load_epics_logs_reads_stream_incrementally_and_backfills_from_hash(
         [],
     ]
     mock_valkey.hgetall.return_value = {
-        "Chopper_Speed": "250.0",
-        "Disc_Delay": "12400.0",
+        "Chopper_Speed": json.dumps(
+            {"value": "250.0", "timestamp": "2026-11-26T09:01:00+00:00"}
+        ),
+        # Static config set before run start -> clamped to run_start_iso
+        "Disc_Delay": json.dumps(
+            {"value": "12400.0", "timestamp": "2026-11-25T15:00:00+00:00"}
+        ),
+        # Dynamic value changed mid-run -> preserved at its true timestamp, NOT backdated
+        "Sample_Temp": json.dumps(
+            {"value": "50.0", "timestamp": "2026-11-26T09:05:00+00:00"}
+        ),
+        # Malformed entry -> skipped safely
+        "Bad_Block": "not-json",
     }
 
     monkeypatch.setattr(processor, "VALKEY_CLIENT", mock_valkey)
     monkeypatch.setattr(processor, "AddTimeSeriesLog", fake_add_log)
 
-    run_start_iso = "2026-11-26T09:00:00"
-    last_id = processor._load_epics_logs(mock_ws, "0-0", run_start_iso)
+    run_start_dt = datetime.datetime(2026, 11, 26, 9, 0, 0, tzinfo=datetime.UTC)
+    cursor = processor._EpicsCursor()
+    processor._load_epics_logs(mock_ws, cursor, run_start_dt)
 
-    assert last_id == "100-0"
+    assert cursor.last_id == "100-0"
     assert recorded_calls == [
         ("Chopper_Speed", "2026-11-26T09:01:00+00:00", "250.0"),
-        ("Disc_Delay", run_start_iso, "12400.0"),
+        ("Disc_Delay", "2026-11-26T09:00:00", "12400.0"),
+        ("Sample_Temp", "2026-11-26T09:05:00+00:00", "50.0"),
     ]
     assert mock_valkey.xrange.call_args_list[0].args[1:] == ("-", "+")
 
-    # Second reduction: only reads entries strictly after 100-0 and does not re-add Disc_Delay
+    # Second reduction: only reads entries strictly after 100-0 and does not re-add backfilled blocks
     recorded_calls.clear()
-    last_id = processor._load_epics_logs(mock_ws, last_id, run_start_iso)
+    processor._load_epics_logs(mock_ws, cursor, run_start_dt)
 
-    assert last_id == "100-0"
+    assert cursor.last_id == "100-0"
     assert recorded_calls == []
     assert mock_valkey.xrange.call_args_list[1].args[1:] == ("(100-0", "+")
+
+
+def test_load_epics_logs_partial_failure_does_not_duplicate_applied_entries(
+    monkeypatch,
+):
+    """Verify cursor advances per applied entry so partial failures resume without duplicating prior logs."""
+    import datetime
+
+    import live_data_processor.main as processor
+
+    recorded_calls: list[tuple[str, str, str]] = []
+    fail_once = {"triggered": False}
+
+    def flaky_add_log(_ws_name, log_name, timestamp, value):
+        if log_name == "Chopper_Delay" and not fail_once["triggered"]:
+            fail_once["triggered"] = True
+            raise RuntimeError("transient Mantid failure")
+        recorded_calls.append((log_name, timestamp, value))
+
+    mock_run = MagicMock()
+    mock_run.hasProperty.return_value = True
+    mock_ws = MagicMock()
+    mock_ws.getRun.return_value = mock_run
+
+    entry_1 = (
+        "100-0",
+        {
+            "block_name": "Chopper_Speed",
+            "value": "250.0",
+            "timestamp": "2026-11-26T09:01:00+00:00",
+        },
+    )
+    entry_2 = (
+        "101-0",
+        {
+            "block_name": "Chopper_Delay",
+            "value": "2573.0",
+            "timestamp": "2026-11-26T09:01:05+00:00",
+        },
+    )
+    entry_3 = (
+        "102-0",
+        {
+            "block_name": "Disc_Speed",
+            "value": "50.0",
+            "timestamp": "2026-11-26T09:01:10+00:00",
+        },
+    )
+
+    mock_valkey = MagicMock()
+    mock_valkey.xrange.side_effect = [
+        [entry_1, entry_2, entry_3],
+        [entry_2, entry_3],
+    ]
+    mock_valkey.hgetall.return_value = {}
+
+    monkeypatch.setattr(processor, "VALKEY_CLIENT", mock_valkey)
+    monkeypatch.setattr(processor, "AddTimeSeriesLog", flaky_add_log)
+
+    run_start_dt = datetime.datetime(2026, 11, 26, 9, 0, 0, tzinfo=datetime.UTC)
+    cursor = processor._EpicsCursor()
+
+    # First attempt fails on entry_2 after entry_1 succeeded
+    with pytest.raises(RuntimeError, match="transient Mantid failure"):
+        processor._load_epics_logs(mock_ws, cursor, run_start_dt)
+
+    assert cursor.last_id == "100-0"
+    assert recorded_calls == [("Chopper_Speed", "2026-11-26T09:01:00+00:00", "250.0")]
+
+    # Next reduction resumes strictly after 100-0; entry_1 is NOT duplicated, entry_2 and entry_3 succeed
+    processor._load_epics_logs(mock_ws, cursor, run_start_dt)
+
+    assert cursor.last_id == "102-0"
+    assert mock_valkey.xrange.call_args_list[1].args[1:] == ("(100-0", "+")
+    assert recorded_calls == [
+        ("Chopper_Speed", "2026-11-26T09:01:00+00:00", "250.0"),
+        ("Chopper_Delay", "2026-11-26T09:01:05+00:00", "2573.0"),
+        ("Disc_Speed", "2026-11-26T09:01:10+00:00", "50.0"),
+    ]
 
 
 @patch("live_data_processor.main.seek_event_consumer_to_runstart")
