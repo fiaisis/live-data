@@ -20,6 +20,7 @@ VALKEY_HOST = os.environ.get("VALKEY_HOST", "localhost")
 VALKEY_PORT = int(os.environ.get("VALKEY_PORT", "6379"))
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 STREAM_KEY = f"instrument:{INSTRUMENT}:epics_stream"
+LATEST_KEY = f"instrument:{INSTRUMENT}:epics_latest"
 
 logger = logging.getLogger(f"internal_{INSTRUMENT}")
 logger.setLevel(logging.INFO)
@@ -176,6 +177,7 @@ def main(wait_timeout: float = 1.0) -> None:
                 },
                 maxlen=10000,  # Keep only the last 10000 entries
             )
+            VALKEY_CLIENT.hset(LATEST_KEY, block_name, str(value))
         except Exception as exc:
             # Determine if this is a connection-related error from redis. Different
             # redis client implementations may expose the exception under different

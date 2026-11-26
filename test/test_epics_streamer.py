@@ -57,6 +57,12 @@ def test_main_valkey_xadd(mock_init_pvs, valkey_client_mock):
     assert fields["timestamp"] == "2023-11-14T22:13:20+00:00"
     assert kwargs["maxlen"] == 10000
 
+    valkey_client_mock.hset.assert_called_once()
+    hset_args, _ = valkey_client_mock.hset.call_args
+    assert "epics_latest" in hset_args[0]
+    assert hset_args[1] == "TestBlock"
+    assert hset_args[2] == "42.5"
+
 
 @patch("live_data_processor.epics_streamer.init_pvs")
 def test_main_valkey_connection_error_handled(mock_init_pvs, valkey_client_mock):

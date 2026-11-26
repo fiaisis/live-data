@@ -288,20 +288,35 @@ def test_extract_isis_proton_charge_running_setup_and_none():
     assert extract_isis_proton_charge(plain_ev) is None
 
 
+class _FakeTimeSeriesProp:
+    """Minimal stand-in for Mantid FloatTimeSeriesProperty."""
+
+    def __init__(self) -> None:
+        self.entries: list[tuple[object, float]] = []
+
+    def size(self) -> int:
+        return len(self.entries)
+
+    def lastTime(self) -> object:  # noqa: N802
+        return self.entries[-1][0]
+
+    def addValue(self, timestamp: object, value: float) -> None:  # noqa: N802
+        self.entries.append((timestamp, value))
+
+
 def test_process_events_deduplicates_proton_charge_per_pulse(monkeypatch):
     """Verify multiple ev42 cards sharing a pulse timestamp only record proton_charge once."""
     from streaming_data_types.fbschemas.isis_event_info_is84.RunState import RunState
 
     import live_data_processor.main as processor
 
-    mock_prop = MagicMock()
+    fake_prop = _FakeTimeSeriesProp()
     mock_run = MagicMock()
     mock_run.hasProperty.return_value = True
-    mock_run.getProperty.return_value = mock_prop
+    mock_run.getProperty.return_value = fake_prop
     mock_ws = MagicMock()
     mock_ws.getRun.return_value = mock_run
 
-    monkeypatch.setattr(processor, "LAST_PROTON_CHARGE_PULSE_NS", None)
     monkeypatch.setattr(processor, "mtd", {processor.LIVE_WS_NAME: mock_ws})
     monkeypatch.setattr(processor, "DateAndTime", lambda ns: f"dt:{ns}")
 
@@ -324,12 +339,15 @@ def test_process_events_deduplicates_proton_charge_per_pulse(monkeypatch):
     processor.process_events(_make_ev42_event(pulse_1, [3000], [3], isis_1))
     processor.process_events(_make_ev42_event(pulse_2, [4000], [4], isis_2))
 
-    assert mock_prop.addValue.call_count == 2
-    first_call, second_call = mock_prop.addValue.call_args_list
-    assert first_call.args[0] == f"dt:{pulse_1 - processor.UNIX_TO_MANTID_OFFSET_NS}"
-    assert first_call.args[1] == pytest.approx(0.00116)
-    assert second_call.args[0] == f"dt:{pulse_2 - processor.UNIX_TO_MANTID_OFFSET_NS}"
-    assert second_call.args[1] == pytest.approx(0.00117)
+    assert len(fake_prop.entries) == 2
+    assert (
+        fake_prop.entries[0][0] == f"dt:{pulse_1 - processor.UNIX_TO_MANTID_OFFSET_NS}"
+    )
+    assert fake_prop.entries[0][1] == pytest.approx(0.00116)
+    assert (
+        fake_prop.entries[1][0] == f"dt:{pulse_2 - processor.UNIX_TO_MANTID_OFFSET_NS}"
+    )
+    assert fake_prop.entries[1][1] == pytest.approx(0.00117)
 
 
 def test_process_events_records_proton_charge_on_empty_event_frame(monkeypatch):
@@ -338,14 +356,13 @@ def test_process_events_records_proton_charge_on_empty_event_frame(monkeypatch):
 
     import live_data_processor.main as processor
 
-    mock_prop = MagicMock()
+    fake_prop = _FakeTimeSeriesProp()
     mock_run = MagicMock()
     mock_run.hasProperty.return_value = True
-    mock_run.getProperty.return_value = mock_prop
+    mock_run.getProperty.return_value = fake_prop
     mock_ws = MagicMock()
     mock_ws.getRun.return_value = mock_run
 
-    monkeypatch.setattr(processor, "LAST_PROTON_CHARGE_PULSE_NS", None)
     monkeypatch.setattr(processor, "mtd", {processor.LIVE_WS_NAME: mock_ws})
     monkeypatch.setattr(processor, "DateAndTime", lambda ns: f"dt:{ns}")
 
@@ -363,6 +380,65 @@ def test_process_events_records_proton_charge_on_empty_event_frame(monkeypatch):
 
     processor.process_events(empty_ev)
 
-    mock_prop.addValue.assert_called_once()
-    assert mock_prop.addValue.call_args.args[1] == pytest.approx(0.0012)
+    assert len(fake_prop.entries) == 1
+    assert fake_prop.entries[0][1] == pytest.approx(0.0012)
     mock_ws.getSpectrum.assert_not_called()
+
+
+def test_load_epics_logs_reads_stream_incrementally_and_backfills_from_hash(
+    monkeypatch,
+):
+    """Verify _load_epics_logs drains new stream entries and backfills missing static blocks from epics_latest."""
+    import live_data_processor.main as processor
+
+    present_props: set[str] = set()
+
+    def fake_add_log(_ws_name, log_name, timestamp, value):
+        present_props.add(log_name)
+        recorded_calls.append((log_name, timestamp, value))
+
+    recorded_calls: list[tuple[str, str, str]] = []
+    mock_run = MagicMock()
+    mock_run.hasProperty.side_effect = lambda name: name in present_props
+    mock_ws = MagicMock()
+    mock_ws.getRun.return_value = mock_run
+
+    mock_valkey = MagicMock()
+    mock_valkey.xrange.side_effect = [
+        [
+            (
+                "100-0",
+                {
+                    "block_name": "Chopper_Speed",
+                    "value": "250.0",
+                    "timestamp": "2026-11-26T09:01:00+00:00",
+                },
+            )
+        ],
+        [],
+    ]
+    mock_valkey.hgetall.return_value = {
+        "Chopper_Speed": "250.0",
+        "Disc_Delay": "12400.0",
+    }
+
+    monkeypatch.setattr(processor, "VALKEY_CLIENT", mock_valkey)
+    monkeypatch.setattr(processor, "AddTimeSeriesLog", fake_add_log)
+
+    run_start_iso = "2026-11-26T09:00:00"
+    last_id = processor._load_epics_logs(mock_ws, "0-0", run_start_iso)
+
+    assert last_id == "100-0"
+    assert recorded_calls == [
+        ("Chopper_Speed", "2026-11-26T09:01:00+00:00", "250.0"),
+        ("Disc_Delay", run_start_iso, "12400.0"),
+    ]
+    assert mock_valkey.xrange.call_args_list[0].args[1:] == ("-", "+")
+
+    # Second reduction: only reads entries strictly after 100-0 and does not re-add Disc_Delay
+    recorded_calls.clear()
+    last_id = processor._load_epics_logs(mock_ws, last_id, run_start_iso)
+
+    assert last_id == "100-0"
+    assert recorded_calls == []
+    assert mock_valkey.xrange.call_args_list[1].args[1:] == ("(100-0", "+")

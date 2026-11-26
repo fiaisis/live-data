@@ -97,7 +97,6 @@ LOG_COOLDOWN = 30.0
 CATCHUP_START_TIME = time.time()  # Start timing as soon as the script begins
 IS_CATCHING_UP = True  # Assume we start in a catch-up state
 REALTIME_LAG_THRESHOLD = 1.5
-LAST_PROTON_CHARGE_PULSE_NS: int | None = None
 
 
 def extract_isis_proton_charge(events: EventMessage) -> float | None:
@@ -120,31 +119,31 @@ def extract_isis_proton_charge(events: EventMessage) -> float | None:
 
 def _record_proton_charge(
     ws: Any,
-    raw_pulse_time_ns: int,
     pulse_time: DateAndTime,
     events: EventMessage,
 ) -> None:
     """
     Record deduplicated per-pulse proton charge on the workspace's proton_charge log.
     :param ws: The live Mantid EventWorkspace.
-    :param raw_pulse_time_ns: The Unix pulse timestamp in nanoseconds.
     :param pulse_time: The Mantid DateAndTime for the pulse.
     :param events: The decoded Kafka ev42 EventMessage.
     :return: None.
     """
-    global LAST_PROTON_CHARGE_PULSE_NS  # noqa: PLW0603
-    if raw_pulse_time_ns == LAST_PROTON_CHARGE_PULSE_NS:
-        return
-    proton_charge = extract_isis_proton_charge(events)
-    if proton_charge is None:
-        return
     run = ws.getRun()
-    if not run.hasProperty("proton_charge"):
+    if run.hasProperty("proton_charge"):
+        prop = run.getProperty("proton_charge")
+        if prop.size() > 0 and prop.lastTime() == pulse_time:
+            return
+    else:
         prop = FloatTimeSeriesProperty("proton_charge")
         prop.units = "uAh"
         run.addProperty("proton_charge", prop, True)
-    run.getProperty("proton_charge").addValue(pulse_time, proton_charge)
-    LAST_PROTON_CHARGE_PULSE_NS = raw_pulse_time_ns
+        prop = run.getProperty("proton_charge")
+
+    proton_charge = extract_isis_proton_charge(events)
+    if proton_charge is None:
+        return
+    prop.addValue(pulse_time, proton_charge)
 
 
 def _integrate_proton_charge(ws: Any) -> None:
@@ -156,6 +155,48 @@ def _integrate_proton_charge(ws: Any) -> None:
     run = ws.getRun()
     if run.hasProperty("proton_charge"):
         run.integrateProtonCharge()
+
+
+def _load_epics_logs(ws: Any, last_epics_id: str, run_start_iso: str) -> str:
+    """
+    Append new EPICS stream updates to the workspace and backfill missing blocks from the latest snapshot.
+    :param ws: The live Mantid EventWorkspace.
+    :param last_epics_id: The last Valkey stream entry ID already loaded, or "0-0" if none.
+    :param run_start_iso: ISO-8601 UTC timestamp of the current run start for backfilled static logs.
+    :return: The updated last Valkey stream entry ID.
+    """
+    epics_stream_key = f"instrument:{INSTRUMENT}:epics_stream"
+    epics_latest_key = f"instrument:{INSTRUMENT}:epics_latest"
+
+    min_id = "-" if last_epics_id == "0-0" else f"({last_epics_id}"
+    epics_logs = VALKEY_CLIENT.xrange(epics_stream_key, min_id, "+")
+
+    for entry_id, data in epics_logs:
+        source = data.get("block_name")
+        value = data.get("value")
+        timestamp = data.get("timestamp")
+
+        if source and value and timestamp:
+            AddTimeSeriesLog(
+                LIVE_WS_NAME,
+                source,
+                timestamp,
+                value,
+            )
+        last_epics_id = entry_id
+
+    run = ws.getRun()
+    latest_values = VALKEY_CLIENT.hgetall(epics_latest_key)
+    for block_name, value in latest_values.items():
+        if block_name and value and not run.hasProperty(block_name):
+            AddTimeSeriesLog(
+                LIVE_WS_NAME,
+                block_name,
+                run_start_iso,
+                value,
+            )
+
+    return last_epics_id
 
 
 def get_event_temporal_lag(events: EventMessage) -> float:
@@ -186,7 +227,7 @@ def process_events(events: EventMessage) -> None:
     raw_pulse_time_ns = events.PulseTime()
     pulse_time = DateAndTime(raw_pulse_time_ns - UNIX_TO_MANTID_OFFSET_NS)
     ws = mtd[LIVE_WS_NAME]
-    _record_proton_charge(ws, raw_pulse_time_ns, pulse_time, events)
+    _record_proton_charge(ws, pulse_time, events)
 
     times_of_flight = events.TimeOfFlightAsNumpy()
 
@@ -247,7 +288,6 @@ def initialize_run(
     :return: The RunStart message that was resolved and used to initialize the run.
     :raises TopicIncompleteError: If no RunStart message can be found on runInfo.
     """
-    global LAST_PROTON_CHARGE_PULSE_NS  # noqa: PLW0603
     external_logger.info("Initializing run: %s", str(run_start))
 
     if run_start is None:
@@ -256,7 +296,6 @@ def initialize_run(
         if run_start is None:
             raise TopicIncompleteError("No RunStart found in runInfo")
     initialize_instrument_workspace(INSTRUMENT, LIVE_WS_NAME, run_start)
-    LAST_PROTON_CHARGE_PULSE_NS = None
     seek_event_consumer_to_runstart(INSTRUMENT, run_start, events_consumer)
     return run_start
 
@@ -310,7 +349,7 @@ def find_new_run_start(
     return None
 
 
-def start_live_reduction(  # noqa: C901, PLR0915
+def start_live_reduction(  # noqa: PLR0915
     events_consumer: KafkaConsumer,
     runinfo_consumer: KafkaConsumer,
 ) -> None:
@@ -366,6 +405,8 @@ def start_live_reduction(  # noqa: C901, PLR0915
         next_run_start = None
         pending_run_start = None
         current_run_name = extract_run_name(current_run_start)
+        run_start_iso = datetime_from_record_timestamp(current_run_start.StartTime()).replace(" ", "T")
+        last_epics_id = "0-0"
 
         # Consume events until we detect a new run, then break to reinitialize.
         for message in events_consumer:
@@ -400,25 +441,8 @@ def start_live_reduction(  # noqa: C901, PLR0915
             # Execute reduction function periodically
             if (now - script_last_executed_time).total_seconds() > SCRIPT_EXECUTION_INTERVAL:
                 try:
-                    stream_key = f"instrument:{INSTRUMENT}:epics_stream"
-
-                    # Fetch all events currently in the stream
-                    epics_logs = VALKEY_CLIENT.xrange(stream_key, "-", "+")
-
-                    for _, data in epics_logs:
-                        source = data.get("block_name")
-                        value = data.get("value")
-                        timestamp = data.get("timestamp")
-
-                        if source and value and timestamp:
-                            AddTimeSeriesLog(
-                                LIVE_WS_NAME,
-                                source,
-                                timestamp,
-                                value,
-                            )
-
                     ws = mtd[LIVE_WS_NAME]
+                    last_epics_id = _load_epics_logs(ws, last_epics_id, run_start_iso)
                     _integrate_proton_charge(ws)
                     RemoveWorkspaceHistory(ws)
                     external_logger.info("%s workspace has %s number of events", LIVE_WS_NAME, ws.getNumberEvents())
