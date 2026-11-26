@@ -227,3 +227,342 @@ def test_run_boundary_keeps_events_in_their_own_workspace(monkeypatch):
         ("process", next_event),
         ("initialize", None),
     ]
+
+
+def _make_ev42_event(
+    pulse_time_ns: int,
+    tofs: list[int],
+    det_ids: list[int],
+    isis_specific: dict[str, int | float] | None = None,
+):
+    """Build a real ev42 EventMessage FlatBuffer with optional is84 ISISData."""
+    from streaming_data_types.eventdata_ev42 import serialise_ev42
+    from streaming_data_types.fbschemas.eventdata_ev42.EventMessage import EventMessage
+
+    buf = serialise_ev42(
+        source_name="merlin",
+        message_id=1,
+        pulse_time=pulse_time_ns,
+        time_of_flight=tofs,
+        detector_id=det_ids,
+        isis_specific=isis_specific,
+    )
+    return EventMessage.GetRootAsEventMessage(buf, 0)
+
+
+def test_extract_isis_proton_charge_running_setup_and_none():
+    """Verify is84 proton_charge extraction for RUNNING, SETUP, and missing ISISData."""
+    from streaming_data_types.fbschemas.isis_event_info_is84.RunState import RunState
+
+    from live_data_processor.main import extract_isis_proton_charge
+
+    running_ev = _make_ev42_event(
+        pulse_time_ns=1_795_684_408_723_078_656,
+        tofs=[1000],
+        det_ids=[1],
+        isis_specific={
+            "period_number": 0,
+            "run_state": RunState.RUNNING,
+            "proton_charge": 0.00125,
+        },
+    )
+    setup_ev = _make_ev42_event(
+        pulse_time_ns=1_795_684_408_723_078_656,
+        tofs=[1000],
+        det_ids=[1],
+        isis_specific={
+            "period_number": 0,
+            "run_state": RunState.SETUP,
+            "proton_charge": 0.00125,
+        },
+    )
+    plain_ev = _make_ev42_event(
+        pulse_time_ns=1_795_684_408_723_078_656,
+        tofs=[1000],
+        det_ids=[1],
+        isis_specific=None,
+    )
+
+    assert extract_isis_proton_charge(running_ev) == pytest.approx(0.00125)
+    assert extract_isis_proton_charge(setup_ev) is None
+    assert extract_isis_proton_charge(plain_ev) is None
+
+
+class _FakeTimeSeriesProp:
+    """Minimal stand-in for Mantid FloatTimeSeriesProperty."""
+
+    def __init__(self) -> None:
+        self.entries: list[tuple[object, float]] = []
+
+    def size(self) -> int:
+        return len(self.entries)
+
+    def lastTime(self) -> object:  # noqa: N802
+        return self.entries[-1][0]
+
+    def addValue(self, timestamp: object, value: float) -> None:  # noqa: N802
+        self.entries.append((timestamp, value))
+
+
+def test_process_events_deduplicates_proton_charge_per_pulse(monkeypatch):
+    """Verify multiple ev42 cards sharing a pulse timestamp only record proton_charge once."""
+    from streaming_data_types.fbschemas.isis_event_info_is84.RunState import RunState
+
+    import live_data_processor.main as processor
+
+    fake_prop = _FakeTimeSeriesProp()
+    mock_run = MagicMock()
+    mock_run.hasProperty.return_value = True
+    mock_run.getProperty.return_value = fake_prop
+    mock_ws = MagicMock()
+    mock_ws.getRun.return_value = mock_run
+
+    monkeypatch.setattr(processor, "mtd", {processor.LIVE_WS_NAME: mock_ws})
+    monkeypatch.setattr(processor, "DateAndTime", lambda ns: f"dt:{ns}")
+
+    pulse_1 = 1_795_684_408_723_078_656
+    pulse_2 = 1_795_684_408_743_001_600
+    isis_1 = {
+        "period_number": 0,
+        "run_state": RunState.RUNNING,
+        "proton_charge": 0.00116,
+    }
+    isis_2 = {
+        "period_number": 0,
+        "run_state": RunState.RUNNING,
+        "proton_charge": 0.00117,
+    }
+
+    # Three DAE cards for pulse_1, then one card for pulse_2
+    processor.process_events(_make_ev42_event(pulse_1, [1000], [1], isis_1))
+    processor.process_events(_make_ev42_event(pulse_1, [2000], [2], isis_1))
+    processor.process_events(_make_ev42_event(pulse_1, [3000], [3], isis_1))
+    processor.process_events(_make_ev42_event(pulse_2, [4000], [4], isis_2))
+
+    assert len(fake_prop.entries) == 2
+    assert (
+        fake_prop.entries[0][0] == f"dt:{pulse_1 - processor.UNIX_TO_MANTID_OFFSET_NS}"
+    )
+    assert fake_prop.entries[0][1] == pytest.approx(0.00116)
+    assert (
+        fake_prop.entries[1][0] == f"dt:{pulse_2 - processor.UNIX_TO_MANTID_OFFSET_NS}"
+    )
+    assert fake_prop.entries[1][1] == pytest.approx(0.00117)
+
+
+def test_process_events_records_proton_charge_on_empty_event_frame(monkeypatch):
+    """Verify frames with zero neutron events still record proton_charge."""
+    from streaming_data_types.fbschemas.isis_event_info_is84.RunState import RunState
+
+    import live_data_processor.main as processor
+
+    fake_prop = _FakeTimeSeriesProp()
+    mock_run = MagicMock()
+    mock_run.hasProperty.return_value = True
+    mock_run.getProperty.return_value = fake_prop
+    mock_ws = MagicMock()
+    mock_ws.getRun.return_value = mock_run
+
+    monkeypatch.setattr(processor, "mtd", {processor.LIVE_WS_NAME: mock_ws})
+    monkeypatch.setattr(processor, "DateAndTime", lambda ns: f"dt:{ns}")
+
+    pulse = 1_795_684_408_803_294_720
+    empty_ev = _make_ev42_event(
+        pulse,
+        tofs=[],
+        det_ids=[],
+        isis_specific={
+            "period_number": 0,
+            "run_state": RunState.RUNNING,
+            "proton_charge": 0.0012,
+        },
+    )
+
+    processor.process_events(empty_ev)
+
+    assert len(fake_prop.entries) == 1
+    assert fake_prop.entries[0][1] == pytest.approx(0.0012)
+    mock_ws.getSpectrum.assert_not_called()
+
+
+def test_load_epics_logs_reads_stream_incrementally_and_backfills_from_hash(
+    monkeypatch,
+):
+    """Verify _load_epics_logs drains stream incrementally and handles pre-run vs mid-run hash timestamps."""
+    import datetime
+    import json
+
+    import live_data_processor.main as processor
+
+    present_props: set[str] = set()
+
+    def fake_add_log(_ws_name, log_name, timestamp, value):
+        present_props.add(log_name)
+        recorded_calls.append((log_name, timestamp, value))
+
+    recorded_calls: list[tuple[str, str, str]] = []
+    mock_run = MagicMock()
+    mock_run.hasProperty.side_effect = lambda name: name in present_props
+    mock_ws = MagicMock()
+    mock_ws.getRun.return_value = mock_run
+
+    mock_valkey = MagicMock()
+    mock_valkey.xrange.side_effect = [
+        [
+            (
+                "100-0",
+                {
+                    "block_name": "Chopper_Speed",
+                    "value": "250.0",
+                    "timestamp": "2026-11-26T09:01:00+00:00",
+                },
+            )
+        ],
+        [],
+    ]
+    mock_valkey.hgetall.return_value = {
+        "Chopper_Speed": json.dumps(
+            {"value": "250.0", "timestamp": "2026-11-26T09:01:00+00:00"}
+        ),
+        # Static config set before run start -> clamped to run_start_iso
+        "Disc_Delay": json.dumps(
+            {"value": "12400.0", "timestamp": "2026-11-25T15:00:00+00:00"}
+        ),
+        # Dynamic value changed mid-run -> preserved at its true timestamp, NOT backdated
+        "Sample_Temp": json.dumps(
+            {"value": "50.0", "timestamp": "2026-11-26T09:05:00+00:00"}
+        ),
+        # Malformed entry -> skipped safely
+        "Bad_Block": "not-json",
+    }
+
+    monkeypatch.setattr(processor, "VALKEY_CLIENT", mock_valkey)
+    monkeypatch.setattr(processor, "AddTimeSeriesLog", fake_add_log)
+
+    run_start_dt = datetime.datetime(2026, 11, 26, 9, 0, 0, tzinfo=datetime.UTC)
+    cursor = processor.EpicsCursor()
+    processor.load_epics_logs(mock_ws, cursor, run_start_dt)
+
+    assert cursor.last_id == "100-0"
+    assert recorded_calls == [
+        ("Chopper_Speed", "2026-11-26T09:01:00+00:00", "250.0"),
+        ("Disc_Delay", "2026-11-26T09:00:00", "12400.0"),
+        ("Sample_Temp", "2026-11-26T09:05:00+00:00", "50.0"),
+    ]
+    assert mock_valkey.xrange.call_args_list[0].args[1:] == ("-", "+")
+
+    # Second reduction: only reads entries strictly after 100-0 and does not re-add backfilled blocks
+    recorded_calls.clear()
+    processor.load_epics_logs(mock_ws, cursor, run_start_dt)
+
+    assert cursor.last_id == "100-0"
+    assert recorded_calls == []
+    assert mock_valkey.xrange.call_args_list[1].args[1:] == ("(100-0", "+")
+
+
+def test_load_epics_logs_partial_failure_does_not_duplicate_applied_entries(
+    monkeypatch,
+):
+    """Verify cursor advances per applied entry so partial failures resume without duplicating prior logs."""
+    import datetime
+
+    import live_data_processor.main as processor
+
+    recorded_calls: list[tuple[str, str, str]] = []
+    fail_once = {"triggered": False}
+
+    def flaky_add_log(_ws_name, log_name, timestamp, value):
+        if log_name == "Chopper_Delay" and not fail_once["triggered"]:
+            fail_once["triggered"] = True
+            raise RuntimeError("transient Mantid failure")
+        recorded_calls.append((log_name, timestamp, value))
+
+    mock_run = MagicMock()
+    mock_run.hasProperty.return_value = True
+    mock_ws = MagicMock()
+    mock_ws.getRun.return_value = mock_run
+
+    entry_1 = (
+        "100-0",
+        {
+            "block_name": "Chopper_Speed",
+            "value": "250.0",
+            "timestamp": "2026-11-26T09:01:00+00:00",
+        },
+    )
+    entry_2 = (
+        "101-0",
+        {
+            "block_name": "Chopper_Delay",
+            "value": "2573.0",
+            "timestamp": "2026-11-26T09:01:05+00:00",
+        },
+    )
+    entry_3 = (
+        "102-0",
+        {
+            "block_name": "Disc_Speed",
+            "value": "50.0",
+            "timestamp": "2026-11-26T09:01:10+00:00",
+        },
+    )
+
+    mock_valkey = MagicMock()
+    mock_valkey.xrange.side_effect = [
+        [entry_1, entry_2, entry_3],
+        [entry_2, entry_3],
+    ]
+    mock_valkey.hgetall.return_value = {}
+
+    monkeypatch.setattr(processor, "VALKEY_CLIENT", mock_valkey)
+    monkeypatch.setattr(processor, "AddTimeSeriesLog", flaky_add_log)
+
+    run_start_dt = datetime.datetime(2026, 11, 26, 9, 0, 0, tzinfo=datetime.UTC)
+    cursor = processor.EpicsCursor()
+
+    # First attempt fails on entry_2 after entry_1 succeeded
+    with pytest.raises(RuntimeError, match="transient Mantid failure"):
+        processor.load_epics_logs(mock_ws, cursor, run_start_dt)
+
+    assert cursor.last_id == "100-0"
+    assert recorded_calls == [("Chopper_Speed", "2026-11-26T09:01:00+00:00", "250.0")]
+
+    # Next reduction resumes strictly after 100-0; entry_1 is NOT duplicated, entry_2 and entry_3 succeed
+    processor.load_epics_logs(mock_ws, cursor, run_start_dt)
+
+    assert cursor.last_id == "102-0"
+    assert mock_valkey.xrange.call_args_list[1].args[1:] == ("(100-0", "+")
+    assert recorded_calls == [
+        ("Chopper_Speed", "2026-11-26T09:01:00+00:00", "250.0"),
+        ("Chopper_Delay", "2026-11-26T09:01:05+00:00", "2573.0"),
+        ("Disc_Speed", "2026-11-26T09:01:10+00:00", "50.0"),
+    ]
+
+
+@patch("live_data_processor.main.seek_event_consumer_to_runstart")
+@patch("live_data_processor.main.initialize_instrument_workspace")
+def test_initialize_run_logs_clean_run_info_and_resets_catchup(
+    _mock_workspace, _mock_seek, monkeypatch
+):
+    """Verify initialize_run logs run name/timestamp cleanly and resets catch-up tracking."""
+    import live_data_processor.main as processor
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(processor, "external_logger", mock_logger)
+    monkeypatch.setattr(processor, "CATCHUP_START_TIME", 0.0)
+    monkeypatch.setattr(processor, "IS_CATCHING_UP", False)
+    monkeypatch.setattr(processor.time, "time", lambda: 1234.5)
+
+    run_start = MagicMock(spec=RunStart)
+    run_start.RunName.return_value = b"MERLIN00075560"
+    run_start.StartTime.return_value = 1_795_686_879_000  # 2026-11-26 09:54:39 UTC
+
+    processor.initialize_run(MagicMock(), MagicMock(), run_start=run_start)
+
+    assert processor.CATCHUP_START_TIME == 1234.5
+    assert processor.IS_CATCHING_UP is True
+    mock_logger.info.assert_called_once_with(
+        "Initializing run %s (started at %s)",
+        "MERLIN00075560",
+        "2026-11-26 09:54:39",
+    )

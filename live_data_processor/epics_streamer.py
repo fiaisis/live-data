@@ -2,6 +2,7 @@
 
 import binascii
 import datetime
+import json
 import logging
 import os
 import queue
@@ -20,6 +21,7 @@ VALKEY_HOST = os.environ.get("VALKEY_HOST", "localhost")
 VALKEY_PORT = int(os.environ.get("VALKEY_PORT", "6379"))
 VALKEY_CLIENT = redis.Redis(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
 STREAM_KEY = f"instrument:{INSTRUMENT}:epics_stream"
+LATEST_KEY = f"instrument:{INSTRUMENT}:epics_latest"
 
 logger = logging.getLogger(f"internal_{INSTRUMENT}")
 logger.setLevel(logging.INFO)
@@ -166,16 +168,20 @@ def main(wait_timeout: float = 1.0) -> None:
             continue
 
         ts_str = _format_timestamp(timestamp_ns)
+        latest_payload = json.dumps({"value": str(value), "timestamp": ts_str})
         try:
-            VALKEY_CLIENT.xadd(
-                STREAM_KEY,
-                {
-                    "block_name": block_name,
-                    "value": str(value),
-                    "timestamp": ts_str,
-                },
-                maxlen=10000,  # Keep only the last 10000 entries
-            )
+            with VALKEY_CLIENT.pipeline(transaction=True) as pipe:
+                pipe.xadd(
+                    STREAM_KEY,
+                    {
+                        "block_name": block_name,
+                        "value": str(value),
+                        "timestamp": ts_str,
+                    },
+                    maxlen=10000,  # Keep only the last 10000 entries
+                )
+                pipe.hset(LATEST_KEY, block_name, latest_payload)
+                pipe.execute()
         except Exception as exc:
             # Determine if this is a connection-related error from redis. Different
             # redis client implementations may expose the exception under different

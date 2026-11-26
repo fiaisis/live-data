@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from mantid.api import AnalysisDataService, mtd
+from mantid.kernel import FloatTimeSeriesProperty
 from mantid.simpleapi import (
     AddSampleLog,
     GroupDetectors,
@@ -63,3 +64,7 @@ def initialize_instrument_workspace(instrument: str, workspace_name: str, run_st
         with mapfile.open("w") as f:
             f.write(outstr)
         GroupDetectors(ws, str(mapfile), OutputWorkspace=workspace_name)
+
+        proton_charge = FloatTimeSeriesProperty("proton_charge")
+        proton_charge.units = "uAh"
+        mtd[workspace_name].getRun().addProperty("proton_charge", proton_charge, True)
