@@ -23,6 +23,16 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/fiaisis/mantid:${{ needs.find-latest-fia-mantid-image.outputs.tag }}
+    services:
+      valkey:
+        image: valkey/valkey:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout project
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v4.1.7
@@ -57,6 +67,8 @@ jobs:
       - name: Run pytest
         env:
           PYTHONPATH: .
+          VALKEY_HOST: valkey
+          VALKEY_PORT: "6379"
         run: pytest test/ --random-order --random-order-bucket=global --cov --cov-report=xml
 
       - name: Install system dependencies for Codecov
