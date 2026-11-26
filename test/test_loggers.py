@@ -1,7 +1,8 @@
 import logging
 import sys
-import time
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from live_data_processor.loggers import (
     TeeLoggerWriter,
@@ -31,14 +32,6 @@ def test_valkey_stream_handler_emit_success():
 
     handler.emit(record)
 
-    # Wait for background worker to call xadd (async). Time out after 2s.
-    start = time.time()
-    while time.time() - start < 2.0:
-        if mock_client.xadd.call_count > 0:
-            break
-        time.sleep(0.01)
-
-    # Update the dictionary here to expect "level": "INFO"
     mock_client.xadd.assert_called_once_with(
         "test_stream", {"msg": "Test log message", "level": "INFO"}, maxlen=100
     )
@@ -52,8 +45,6 @@ def test_valkey_stream_handler_emit_failure(mock_handle_error):
     handler = ValkeyStreamHandler(
         client=mock_client,
         stream_key="test_stream",
-        max_delivery_attempts=1,
-        backoff_base=0.01,
     )
 
     record = logging.LogRecord(
@@ -67,13 +58,6 @@ def test_valkey_stream_handler_emit_failure(mock_handle_error):
     )
 
     handler.emit(record)
-
-    # Wait for background worker to exhaust retries and call handleError (async). Time out after 3s.
-    start = time.time()
-    while time.time() - start < 3.0:
-        if mock_handle_error.call_count > 0:
-            break
-        time.sleep(0.01)
 
     mock_handle_error.assert_called_once_with(record)
 
@@ -151,6 +135,84 @@ def test_capture_and_tee():
 
     # Assert stdout is restored after exiting block
     assert sys.stdout is original_stdout
+
+
+class _FakeValkeyClient:
+    """Lightweight fake Valkey client for high-volume emit tests."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.last_call: tuple[str, dict[str, str], int | None] | None = None
+
+    def xadd(self, name: str, fields: dict[str, str], maxlen: int | None = None) -> str:
+        """Record an XADD call without retaining every historical payload."""
+        self.count += 1
+        self.last_call = (name, fields, maxlen)
+        return f"{self.count}-0"
+
+
+@pytest.mark.parametrize("total_records", [1, 5_005, 50_000])
+def test_valkey_stream_handler_does_not_freeze_at_scale(total_records: int) -> None:
+    """Test that ValkeyStreamHandler continues publishing 1:1 at arbitrary scale."""
+    fake_client = _FakeValkeyClient()
+    handler = ValkeyStreamHandler(
+        client=fake_client, stream_key="test_stream", maxlen=2000
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    for idx in range(total_records):
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg=f"Log message {idx}",
+            args=(),
+            exc_info=None,
+        )
+        handler.emit(record)
+
+    assert fake_client.count == total_records
+    assert fake_client.last_call == (
+        "test_stream",
+        {"msg": f"Log message {total_records - 1}", "level": "INFO"},
+        2000,
+    )
+
+
+@patch("live_data_processor.loggers.ValkeyStreamHandler.handleError")
+def test_valkey_stream_handler_recovers_after_transient_error(
+    mock_handle_error: MagicMock,
+) -> None:
+    """Test that a transient Valkey error does not stop subsequent records from publishing."""
+    mock_client = MagicMock()
+    mock_client.xadd.side_effect = [None, ConnectionError("temporary blip"), None]
+    handler = ValkeyStreamHandler(
+        client=mock_client, stream_key="test_stream", maxlen=2000
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    records = [
+        logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg=f"Message {idx}",
+            args=(),
+            exc_info=None,
+        )
+        for idx in range(3)
+    ]
+
+    for record in records:
+        handler.emit(record)
+
+    mock_handle_error.assert_called_once_with(records[1])
+    assert mock_client.xadd.call_count == len(records)
+    mock_client.xadd.assert_any_call(
+        "test_stream", {"msg": "Message 2", "level": "INFO"}, maxlen=2000
+    )
 
 
 def test_capture_and_tee_exception_recovery():
